@@ -166,44 +166,125 @@ def log(kind, text, meta=None):
     print(f"[{ev['t']}] {kind.upper():8} {text}", flush=True)
 
 
-# --- cloudflared quick tunnel -------------------------------------------------
+# --- public tunnel -------------------------------------------------------------
+# Two transports, tried as a ring. cloudflared is the default - but its data plane rides
+# UDP/TCP 7844, which some networks (VPNs, routers, ISPs) blackhole; the edge then serves
+# 530 forever while the process looks alive. localhost.run is plain ssh on port 22, which
+# those same networks almost always pass. The watchdog walks the ring until one works.
 
-TUNNEL_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
+TUNNEL_RE = re.compile(r"https://[a-z0-9.-]+\.(?:trycloudflare\.com|lhr\.life)\b")
 
 
-def start_tunnel():
-    exe = shutil.which("cloudflared")
-    if not exe:
+def _tunnel_cmd(kind):
+    if kind == "cloudflared":
+        exe = shutil.which("cloudflared")
+        return exe and [exe, "tunnel", "--url", f"http://127.0.0.1:{PORT}", "--no-autoupdate"]
+    exe = shutil.which("ssh")
+    # no -N: localhost.run's sshd announces the tunnel URL on the session channel and
+    # drops session-less connections inside a minute. -T alone keeps the box-drawing off.
+    return exe and [exe, "-T",
+                    "-o", "StrictHostKeyChecking=accept-new",
+                    "-o", "ServerAliveInterval=30",
+                    "-o", "ExitOnForwardFailure=yes",
+                    "-R", f"80:127.0.0.1:{PORT}", "nokey@localhost.run"]
+
+
+TUNNEL_KINDS = ("cloudflared", "localhost.run")
+_tunnel_kind = 0
+
+
+def start_tunnel(advance=False):
+    global _tunnel_proc, _tunnel_kind
+    kinds = [k for k in TUNNEL_KINDS if _tunnel_cmd(k)]
+    if not kinds:
         STATE["tunnel"] = "missing"
-        log("warn", "cloudflared not found - uploads will not be reachable by Enhancor or fal. "
-                    "Install: winget install --id Cloudflare.cloudflared")
+        log("warn", "no tunnel transport - uploads will not be reachable by providers. "
+                    "Install cloudflared, or make sure ssh is on PATH.")
         return
+    if advance:
+        _tunnel_kind += 1
+    else:
+        # A network that blocks 7844 never changes its mind between boots - start with
+        # the transport that last passed a reachability check, not cloudflared every time.
+        try:
+            _tunnel_kind = kinds.index((ROOT / ".tunnel_kind").read_text().strip())
+        except (OSError, ValueError):
+            pass
+    kind = kinds[_tunnel_kind % len(kinds)]
+    STATE["tunnel_kind"] = kind
     STATE["tunnel"] = "starting"
-    log("sys", "starting cloudflared quick tunnel...")
-    global _tunnel_proc
+    log("sys", f"starting tunnel via {kind}...")
     proc = subprocess.Popen(
-        [exe, "tunnel", "--url", f"http://127.0.0.1:{PORT}", "--no-autoupdate"],
+        _tunnel_cmd(kind),
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, encoding="utf-8", errors="replace", bufsize=1,
     )
     _tunnel_proc = proc
     # Windows does not kill children with the parent. An orphaned tunnel keeps serving
     # uploads/ to the internet after this process is gone, so record the pid for stop.bat
-    # and tear it down on any clean exit.
+    # and tear it down on any clean exit. The key stays "cloudflared" so stop.bat is
+    # unchanged - for it, the value is simply the tunnel process, whichever it is.
     PIDFILE.write_text(json.dumps({"server": os.getpid(), "cloudflared": proc.pid}))
     atexit.register(stop_tunnel)
 
     def reader():
         for line in proc.stdout:
             m = TUNNEL_RE.search(line)
-            if m and not STATE["public_base"]:
+            if m and _tunnel_proc is proc and not STATE["public_base"]:
                 STATE["public_base"] = m.group(0)
                 STATE["tunnel"] = "up"
                 log("sys", f"tunnel up: {m.group(0)}")
-        STATE["tunnel"] = "down"
-        log("warn", "cloudflared exited")
+        # Only the live process may mark the tunnel down - a stale reader would race a respawn.
+        if _tunnel_proc is proc:
+            STATE["tunnel"] = "down"
+            log("warn", f"{kind} tunnel exited")
 
     threading.Thread(target=reader, daemon=True).start()
+
+
+_tunnel_lock = threading.Lock()
+
+
+def _tunnel_reachable():
+    """The public hostname answering at all is the check. A tunnel's edge can die while
+    the local process lives on - DNS stops resolving or the edge 530s - and every provider
+    fetch of uploads/ then fails inside the job with an opaque "could not get the file"."""
+    try:
+        with urllib.request.urlopen(public_base() + "/api/config", timeout=15) as r:
+            return r.status < 500
+    except Exception:
+        return False
+
+
+def _tunnel_watchdog():
+    """Two failed reachability checks, or a dead tunnel process, advances to the next
+    transport in the ring. A fresh tunnel gets its first check fast (20s), steady state
+    is once a minute. The new URL is logged; the badge picks it up via /api/config."""
+    fails, seen = 0, ""
+    while True:
+        time.sleep(20 if STATE["public_base"] and STATE["public_base"] != seen else 60)
+        with _tunnel_lock:
+            if STATE["tunnel"] == "up" and STATE["public_base"]:
+                seen = STATE["public_base"]
+                if _tunnel_reachable():
+                    fails = 0
+                    (ROOT / ".tunnel_kind").write_text(STATE["tunnel_kind"], encoding="utf-8")
+                else:
+                    fails += 1
+                if fails < 2:
+                    continue
+                log("err", "tunnel unreachable from outside - trying the next transport. "
+                           "The public URL changes: re-upload any file already queued.")
+            elif STATE["tunnel"] == "down" and any(_tunnel_cmd(k) for k in TUNNEL_KINDS):
+                log("sys", "tunnel process died - trying the next transport...")
+            else:
+                continue
+            fails = 0
+            STATE["tunnel"] = "down"
+            STATE["public_base"] = ""
+            if _tunnel_proc and _tunnel_proc.poll() is None:
+                _tunnel_proc.terminate()
+            start_tunnel(advance=True)
 
 
 def public_base():
@@ -437,6 +518,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/results":
             return self._json(200, {"results": STATE["results"], "history": STATE["history"][-200:]})
 
+        if path == "/api/blob":
+            return self._blob()
+
         if path == "/events":
             return self._sse()
 
@@ -454,6 +538,24 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_HEAD(self):
         self.do_GET()
+
+    def _blob(self):
+        """Hand a result URL's bytes to the local page, which writes them into the folder
+        the user picked with the File System Access API. Provider CDNs send no CORS
+        headers, so the page cannot fetch them itself. Local page only: through the
+        tunnel this endpoint would be an open proxy."""
+        if not self._local_request():
+            return self._json(403, {"error": "local page only"})
+        url = urllib.parse.parse_qs(
+            urllib.parse.urlsplit(self.path).query).get("url", [""])[0]
+        if not url.startswith("http"):
+            return self._json(400, {"error": "bad url"})
+        try:
+            with urllib.request.urlopen(url, timeout=180) as r:
+                blob, ctype = r.read(), r.headers.get_content_type()
+        except Exception as e:
+            return self._json(502, {"error": str(e)})
+        return self._send(200, blob, ctype)
 
     def _sse(self):
         q = queue.Queue(maxsize=1000)
@@ -677,6 +779,7 @@ def main():
         print(f"\n  port {PORT} is already in use - another console is running.\n  {e}\n")
         return
     threading.Thread(target=start_tunnel, daemon=True).start()
+    threading.Thread(target=_tunnel_watchdog, daemon=True).start()
     print(f"\n  PIXEL SLINGER  ->  http://127.0.0.1:{PORT}\n")
     print(f"  enhancor key: {'set' if api_key() else 'MISSING - add ENHANCOR_API_KEY to .env'}")
     print(f"  fal key:      {'set' if fal_key() else 'MISSING - add FAL_KEY to .env'}")

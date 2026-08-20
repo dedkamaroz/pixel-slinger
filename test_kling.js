@@ -148,6 +148,12 @@ KLING_MODELS.forEach(id => {
 });
 
 // --- what the user asked to see ----------------------------------------------
+// House default on every Kling i2v tab: 10s, not the platform's 5s.
+KLING_MODELS.forEach(id => {
+  const f = SERVICES[id].fields.find(([n]) => n === "duration");
+  assert(f && f[3].def === "10", `${id} duration must default to 10s`);
+});
+
 // The Kling page lists exactly these six, newest first, and opens on the newest.
 const navSrc = html.slice(html.indexOf("/* ---------- publisher pages ---------- */"),
                           html.indexOf("const SWITCH"));

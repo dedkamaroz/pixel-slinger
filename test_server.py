@@ -5,6 +5,7 @@ import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -70,6 +71,10 @@ def test_provider_routing():
 def test_tunnel_regex():
     line = "2026-08-05 INF |  https://calm-blue-fox-42.trycloudflare.com   |"
     assert server.TUNNEL_RE.search(line).group(0) == "https://calm-blue-fox-42.trycloudflare.com"
+    line = "f50d42eeaef1d1.lhr.life tunneled with tls termination, https://f50d42eeaef1d1.lhr.life"
+    assert server.TUNNEL_RE.search(line).group(0) == "https://f50d42eeaef1d1.lhr.life"
+    # the localhost.run banner carries its own doc links - none of them may parse as the tunnel
+    assert server.TUNNEL_RE.search("see https://localhost.run/docs/ or https://admin.localhost.run") is None
     assert server.TUNNEL_RE.search("no url here") is None
 
 
@@ -110,6 +115,19 @@ def test_http_roundtrip():
     assert up2["size"] == len(payload) and up2["name"].endswith("_raw_clip_1_.bin"), up2
     with urllib.request.urlopen(up2["local"], timeout=5) as r:
         assert r.read() == payload
+
+    # /api/blob hands a result URL's bytes to the page (Source-folder saves) - and only
+    # to the local page, through the tunnel it would be an open proxy.
+    with urllib.request.urlopen(base + "/api/blob?url=" + urllib.parse.quote(up["local"]),
+                                timeout=5) as r:
+        assert r.read() == payload
+    req = urllib.request.Request(base + "/api/blob?url=" + urllib.parse.quote(up["local"]),
+                                 headers={"Host": "x-y.trycloudflare.com"})
+    try:
+        urllib.request.urlopen(req, timeout=5)
+        assert False, "tunneled /api/blob must be refused"
+    except urllib.error.HTTPError as e:
+        assert e.code == 403, e.code
 
     hook = post("/webhook/tok123", {"request_id": "r1", "result": "http://x/y.png", "status": "success"})
     assert hook["received"] is True
