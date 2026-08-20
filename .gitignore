@@ -4,4 +4,6 @@ outputs/
 __pycache__/
 server.log
 .server.pid
+.tunnel_kind
+tasks/
 d.html

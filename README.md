@@ -73,14 +73,25 @@ Get-Process cloudflared -EA SilentlyContinue     # should return nothing
    The server starts a free quick tunnel on launch (no Cloudflare account, no login). The
    TUNNEL badge in the header goes green and the log prints the public hostname. Without it,
    uploads work locally but neither provider can reach the image URL, and every job fails on
-   their side - Enhancor with `Reference image 1 fetch failed`, fal with a download error.
+   their side - Enhancor with `Reference image 1 fetch failed`, fal with a download error,
+   Kling with `Something went wrong when we tried to get the contents of the file`.
+
+   **The tunnel is watched and self-heals.** Once a minute the server fetches its own public
+   URL; two failures (or a dead tunnel process) and it starts the next transport. Transports
+   form a ring: cloudflared first, then localhost.run over plain ssh. The second exists
+   because cloudflared's data plane rides UDP/TCP **7844**, which some VPNs, routers and ISPs
+   blackhole - the tunnel then "starts" but the edge answers `530` forever and every job
+   fails exactly as above. ssh on port 22 passes those networks. The transport that last
+   worked is remembered in `.tunnel_kind`, so the next start skips the broken one.
 
    The hostname is random and **changes every restart** - that is fine, the proxy rewrites
-   `img_url` and `webhook_url` per request.
+   `img_url` and `webhook_url` per request. When the watchdog swaps transports mid-session
+   the URL also changes: re-upload anything you already queued from the old one.
 
 ## What is exposed, and for how long
 
-cloudflared is a reverse proxy, not storage. Files only ever live in `uploads/` on this machine.
+cloudflared (or localhost.run) is a reverse proxy, not storage. Files only ever live in
+`uploads/` on this machine.
 
 - **While the server runs:** anything in `uploads/` is fetchable by anyone holding the URL, with
   no auth. Quick-tunnel hostnames are unguessable but not secret.
@@ -208,6 +219,14 @@ hook, so removing it breaks a test rather than quietly dropping the feature from
 
 Files land in `uploads/`. Results **save themselves the moment a job finishes** - no clicking -
 into the folder in the Save-to box, or `outputs/` if that box is empty or the path is unusable.
+
+**Source folder.** A dropped file's real path is invisible to a web page (browser security), so
+"save next to the import" works the other way round: the **Source folder** button beside the box
+opens a native folder picker once per session, and from then on results write straight into that
+folder - same naming, same never-overwrite rule. The bytes come through `GET /api/blob?url=`
+(provider CDNs send no CORS headers, and the endpoint answers the local page only, never the
+tunnel). Chrome/Edge only, the pick does not survive a refresh, and a save with post-gen scripts
+picked still goes through the server so the chain can run.
 
 Filenames are `<model>_<destination folder>.<ext>`: with the box set to `C:\new\dir` a Seedance
 render lands as `C:\new\dir\sd2_dir.mp4`, then `sd2_dir_2.mp4`, `sd2_dir_3.mp4` - a previous render

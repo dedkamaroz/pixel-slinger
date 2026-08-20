@@ -415,8 +415,10 @@
 <div class="main">
   <div class="wrap">
     <div class="row full" style="border-bottom:1px solid var(--line)">
-      <div class="lbl">Save folder<small>paste a local path - results land here as &lt;model&gt;_&lt;input filename&gt;. Blank = outputs/</small></div>
-      <div><input id="out-dir" placeholder="D:\Photos\shoot-01"></div>
+      <div class="lbl">Save folder<small>results land here as &lt;model&gt;_&lt;input filename&gt; - blank = outputs/</small></div>
+      <div><input id="out-dir" placeholder="D:\Photos\shoot-01">
+        <button class="ghost" id="dir-pick" title="pick the folder your imports come from - results write straight into it, same naming. Chrome/Edge only; re-pick after a refresh">Source folder&hellip;</button>
+        <span id="dir-note" class="note"></span></div>
     </div>
 
     <div class="row full" style="border-bottom:1px solid var(--line)">
@@ -575,6 +577,58 @@ dirEl.value = localStorage.getItem("outDir") || "";
 dirEl.oninput = ()=> localStorage.setItem("outDir", dirEl.value.trim());
 const outDir = ()=> dirEl.value.trim();
 
+// "Source folder": a dropped file's real path is invisible to a page (browser security),
+// so the user points at the folder once per session instead. Writes go through the File
+// System Access API - Chrome/Edge only - and skip the server, so a save with post-gen
+// scripts picked falls back to the server path to let them run.
+let srcDir = null;
+const dirNote = document.getElementById("dir-note");
+document.getElementById("dir-pick").onclick = async ()=>{
+  if (!window.showDirectoryPicker){ dirNote.textContent = "needs Chrome or Edge"; return; }
+  try { srcDir = await showDirectoryPicker({ mode:"readwrite" }); }
+  catch(e){ return; }   // cancelled - keep whatever was in use
+  dirEl.disabled = true;
+  dirNote.innerHTML = `&rarr; <b>${srcDir.name}</b> <a href="#" id="dir-clear">&times;</a>`;
+  document.getElementById("dir-clear").onclick = ev =>{ ev.preventDefault(); srcDir = null;
+    dirEl.disabled = false; dirNote.textContent = ""; };
+};
+
+// Same naming as the server: <abbr>_<folder>.<ext>, no abbr (gallery re-saves) keeps the
+// timestamped original name, and an existing file is never overwritten (_2, _3...).
+function srcName(folder, url, abbr){
+  const src = url.split("?")[0].split("/").pop() || "x.bin";
+  const m = src.match(/(\.[A-Za-z0-9]{1,5})$/), ext = m ? m[1] : "";
+  abbr = (abbr || "").replace(/[^A-Za-z0-9_-]/g, "");
+  if (!abbr){
+    const d = new Date(), p = n => String(n).padStart(2, "0");
+    return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}_`
+         + `${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}_${src}`;
+  }
+  return `${abbr}_${folder || "out"}${ext || ".bin"}`;
+}
+async function srcWrite(name, blob){
+  const dot = name.lastIndexOf("."), stem = dot > 0 ? name.slice(0, dot) : name,
+        ext = dot > 0 ? name.slice(dot) : "";
+  for (let n = 1;; n++){
+    const cand = n === 1 ? name : `${stem}_${n}${ext}`;
+    try { await srcDir.getFileHandle(cand); }   // exists -> next number
+    catch(e){
+      const fh = await srcDir.getFileHandle(cand, { create:true });
+      const w = await fh.createWritable();
+      await w.write(blob); await w.close();
+      return cand;
+    }
+  }
+}
+// Provider CDNs send no CORS headers, so the bytes come through our own server.
+async function srcSave(url, abbr){
+  const r = await fetch("/api/blob?url=" + encodeURIComponent(url));
+  if (!r.ok) throw new Error("fetch failed: " + r.status);
+  const name = await srcWrite(srcName(srcDir.name, url, abbr), await r.blob());
+  local("sys", `saved -> ${srcDir.name}/${name}`);
+  return `${srcDir.name}/${name}`;
+}
+
 /* ---------- post-gen scripts ---------- */
 // Two independent rows: videos get three slots to chain, images get one. Each drop-down
 // offers every line of its own kind in .env plus "no script", and the slot number is the
@@ -608,21 +662,19 @@ function pgBuild(vid, img, max){
   if (sig === pgSig) return;            // rebuilding would drop a selection mid-change
   pgSig = sig;
   pgRow(pgVidEl, "video", vid, max, "postvidgen",
-        "no POSTVIDGEN_n lines in .env - saved videos are left alone");
+        "no POSTVIDGEN_n lines in .env");
   pgRow(pgImgEl, "image", img, 1, "postimggen",
-        "no POSTIMGGEN_n lines in .env - saved images are left alone");
+        "no POSTIMGGEN_n lines in .env");
 }
 // Which row a tab shows: video generators chain video scripts, the editors run the image
 // one. The gallery holds both kinds of result, so it shows both rows.
 // The hint describes only what is on screen - slot order is a video idea and reads as
 // noise on a tab that offers a single image script.
 const PG_HINT = {
-  vid: "run on the saved video, in slot order - each one is handed what the last produced. "
-     + "Blank = none. The list comes from the POSTVIDGEN_n lines in .env",
-  img: "runs on the saved image. Blank = none. The list comes from the POSTIMGGEN_n lines in .env",
-  both: "run on whatever is saved: videos go through the video row in slot order, each one "
-      + "handed what the last produced; images go through the one image script. Blank = none. "
-      + "The lists come from the POSTVIDGEN_n and POSTIMGGEN_n lines in .env",
+  vid: "run on the saved video, in slot order - blank = none. List: POSTVIDGEN_n lines in .env",
+  img: "runs on the saved image - blank = none. List: POSTIMGGEN_n lines in .env",
+  both: "videos run the video row in slot order, images the image row - blank = none. "
+      + "Lists: POSTVIDGEN_n / POSTIMGGEN_n lines in .env",
 };
 const pgHintEl = document.getElementById("pg-hint");
 function pgShow(id){
@@ -850,7 +902,7 @@ const klingVideos = {
         hint:"native is a generated soundtrack, original keeps the motion video's own sound"}],
       ["resolution","select","Resolution",{def:"720p",
         optsBy: s => isMC(s) ? ["720p","1080p"] : ["720p","1080p","4k"]}],
-      ["duration","select","Duration (s)",{opts:KL_DUR,def:"5",when:notMC,
+      ["duration","select","Duration (s)",{opts:KL_DUR,def:"10",when:notMC,
         hint:"motion control has no duration - the output follows the reference video"}],
       ...KL_OPTS,
     ]
@@ -882,7 +934,7 @@ const klingVideos = {
       ["resolution","select","Resolution",{opts:["720p","1080p","4k"],def:"720p"}],
       ["aspect_ratio","select","Aspect ratio",{opts:["16:9","9:16","1:1"],def:"9:16",
         hint:"required when there is no first frame and no reference video - otherwise those set the framing"}],
-      ["duration","select","Duration (s)",{opts:KL_DUR,def:"5"}],
+      ["duration","select","Duration (s)",{opts:KL_DUR,def:"10"}],
       ...KL_OPTS,
     ]
   },
@@ -908,7 +960,7 @@ const klingVideos = {
       ["resolution","select","Resolution",{opts:["720p","1080p"],def:"720p"}],
       ["aspect_ratio","select","Aspect ratio",{opts:["16:9","9:16","1:1"],def:"9:16",
         hint:"required when there is no first frame and no reference video"}],
-      ["duration","select","Duration (s)",{opts:["3","4","5","6","7","8","9","10"],def:"5",
+      ["duration","select","Duration (s)",{opts:["3","4","5","6","7","8","9","10"],def:"10",
         hint:"a bare first frame with no other reference can only be 5 or 10"}],
       ...KL_OPTS,
     ]
@@ -941,7 +993,7 @@ const klingVideos = {
         hint:"native is a generated soundtrack and forces 1080p; original keeps the motion video's sound"}],
       ["resolution","select","Resolution",{opts:["720p","1080p"],def:"720p",
         hint:"native audio and first-plus-last-frame both force 1080p"}],
-      ["duration","select","Duration (s)",{opts:["5","10"],def:"5",when:notMC,
+      ["duration","select","Duration (s)",{opts:["5","10"],def:"10",when:notMC,
         hint:"motion control has no duration - the output follows the reference video"}],
       ...KL_OPTS,
     ]
@@ -986,7 +1038,7 @@ const klingVideos = {
       ["mode","select","Mode",{opts:["std","pro"],def:"pro",
         hint:"std outputs 720p, pro outputs 1080p. This model has no 4k mode"}],
       // A string enum on this route, not an integer - a number here comes back rejected.
-      ["duration","select","Duration (s)",{opts:["5","10"],def:"5",hint:"5 or 10 only on this model"}],
+      ["duration","select","Duration (s)",{opts:["5","10"],def:"10",hint:"5 or 10 only on this model"}],
       ["watermark","bool","Watermark",{def:false,hint:"asks for a watermarked copy alongside the clean one"}],
       ["external_task_id","text","External task ID",{def:"",
         hint:"optional - your own id for this job; must be unique across the account"}],
@@ -2063,6 +2115,12 @@ function showResult(el, url, id, abbr){
   const b = document.createElement("button"); b.className="ghost"; b.style.margin="0 9px 9px";
   const save = async ()=>{
     b.disabled = true; b.textContent = "Saving...";
+    if (srcDir && !postGen(isVid).length){
+      try { b.title = await srcSave(url, abbr); b.textContent = "Saved"; }
+      catch(e){ b.textContent = "Retry save"; local("err", "save failed: " + e.message); }
+      b.disabled = false;
+      return;
+    }
     const r = await post("/api/save", { url, dir: outDir(), abbr, scripts: postGen(isVid) });
     b.disabled = false;
     if (r.path){ b.textContent = "Saved"; b.title = r.path; }
@@ -2114,6 +2172,11 @@ async function renderGallery(){
     const b = document.createElement("button"); b.className="ghost"; b.textContent="Save"; b.style.margin="0 9px 9px";
     // No form state here, so no input filename to name it after - folder only.
     b.onclick = async ()=>{
+      if (srcDir && !postGen(isVid).length){
+        try { await srcSave(url, null); b.textContent = "Saved"; }
+        catch(e){ b.textContent = "Failed"; local("err", "save failed: " + e.message); }
+        return;
+      }
       const r = await post("/api/save", { url, dir: outDir(), scripts: postGen(isVid) });
       b.textContent = r.path ? "Saved" : "Failed";
     };
