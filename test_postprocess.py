@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """The post-gen chain: right scripts, right order, each fed what the last one wrote."""
+import os
 import tempfile
 from pathlib import Path
 
@@ -38,8 +39,14 @@ def check_run_script_streams():
     real_log, server.log = server.log, lambda k, t, m=None: events.append((k, t, m))
     try:
         with tempfile.TemporaryDirectory() as td:
-            bat = Path(td) / "echo2.bat"
-            bat.write_text("@echo off\r\necho one\r\necho two\r\nexit /b 3\r\n")
+            # Same child, platform-appropriate shell: a .bat only runs under cmd.exe.
+            if os.name == "nt":
+                bat = Path(td) / "echo2.bat"
+                bat.write_text("@echo off\r\necho one\r\necho two\r\nexit /b 3\r\n")
+            else:
+                bat = Path(td) / "echo2.sh"
+                bat.write_text("#!/bin/sh\necho one\necho two\nexit 3\n")
+                bat.chmod(0o755)
             assert server.run_script(f'"{bat}"', "x") is False
     finally:
         server.log = real_log
