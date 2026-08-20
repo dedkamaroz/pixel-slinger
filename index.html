@@ -1,0 +1,2131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pixel Slinger</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Chakra+Petch:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #101315;
+    --panel: #16191C;
+    --line: rgba(75,156,226,.16);
+    --line-soft: rgba(255,255,255,.06);
+    --text: #E9ECEE;
+    --muted: #68727A;
+    --dim: #39424A;
+    --blue: #4B9CE2;
+    --accent: #C7541F;
+    --hot: #F0731F;
+    --armed: #D3381C;
+    --warning: #B8A03A;
+    --good: #3FBF6A;
+    --input: #0E1113;
+    --mono: "JetBrains Mono", ui-monospace, Consolas, "Courier New", monospace;
+    --disp: "Chakra Petch", "JetBrains Mono", sans-serif;
+    --ease: cubic-bezier(.2,1.2,.32,1);
+    /* the 7px corner cut is reused by every plate, cover and inner face */
+    --chamfer: polygon(0 7px,7px 0,100% 0,100% calc(100% - 7px),calc(100% - 7px) 100%,0 100%);
+    font-family: var(--mono);
+    color: var(--text);
+    background: var(--bg);
+  }
+  * { box-sizing: border-box; }
+  @keyframes armPulse { 0%,100%{opacity:.42} 50%{opacity:.78} }
+  @keyframes barCrawl { from{background-position:0 0} to{background-position:28px 0} }
+  @keyframes flicker { 0%,96%,100%{opacity:1} 97%{opacity:.55} 98.5%{opacity:.85} }
+  body {
+    margin: 0; padding: 0; height: 100vh; overflow: hidden;
+    display: flex; flex-direction: column;
+    background: var(--bg); -webkit-font-smoothing: antialiased; font-size: 18px;
+  }
+  /* grid wash behind everything, faded out down the page */
+  body::before {
+    content: ""; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background-image:
+      linear-gradient(rgba(75,156,226,.05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(75,156,226,.05) 1px, transparent 1px);
+    background-size: 56px 56px;
+    -webkit-mask-image: radial-gradient(120% 90% at 50% 0%, #000 0%, transparent 78%);
+    mask-image: radial-gradient(120% 90% at 50% 0%, #000 0%, transparent 78%);
+  }
+
+  /* ---------- header ---------- */
+  .hdr {
+    position: relative; z-index: 50; flex: none;
+    background: linear-gradient(180deg, rgba(19,22,24,.97), rgba(19,22,24,.93));
+    border-bottom: 1px solid var(--line);
+  }
+  /* scanlines are confined to the header - over a form they cost more legibility than they buy */
+  .hdr::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .25;
+    background: repeating-linear-gradient(180deg, rgba(0,0,0,.35) 0 1px, transparent 1px 3px);
+  }
+  .hdr-in { display: flex; align-items: center; gap: 30px; height: 58px; padding: 0 clamp(14px,3vw,32px); }
+  /* second plane: the console toggle takes the right edge, the nav centres in what is left */
+  .hdr-bar { display: flex; align-items: stretch; height: 96px; padding: 0 clamp(14px,3vw,32px);
+             border-top: 1px solid var(--line); }
+  .hdr-bar nav { flex: 1; justify-content: center; gap: clamp(20px,6vw,90px); }
+  .hdr-bar .tog { flex: none; align-self: center; margin-left: 24px; }
+  .brand { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+  .brand a { font-size: 21px; font-weight: 700; letter-spacing: -.5px; white-space: nowrap;
+             text-decoration: none; animation: flicker 7s linear infinite; }
+  .brand .b1 { color: var(--accent); }
+  .brand .b2 { color: var(--blue); }
+  .brand small { font-size: 11px; letter-spacing: .34em; color: var(--dim); white-space: nowrap; }
+  .badges { margin-left: auto; display: flex; gap: 6px; font-size: 12px; letter-spacing: .18em; }
+  .badge { padding: 5px 9px; border: 1px solid var(--line); background: #0A0C0D; color: var(--muted); font-weight: 700; }
+  .badge.ok   { color: #04170C; background: var(--good);    border-color: var(--good); }
+  .badge.bad  { color: #2a0b08; background: var(--armed);   border-color: var(--armed); }
+  .badge.warn { color: #201c07; background: var(--warning); border-color: var(--warning); }
+  .crawl { height: 2px; opacity: .5;
+    background: repeating-linear-gradient(115deg, rgba(199,84,31,.85) 0 14px, rgba(10,11,12,0) 14px 28px);
+    animation: barCrawl 2.4s linear infinite; }
+
+  /* ---------- guarded-switch nav ---------- */
+  nav { display: flex; align-items: stretch; height: 100%; gap: 2px; }
+  .nav-item { position: relative; display: flex; align-items: stretch; }
+  .nb { display: flex; align-items: center; gap: 14px; height: 100%; padding: 0 16px;
+        background: none; border: 0; cursor: pointer; font: inherit;
+        -webkit-tap-highlight-color: transparent; }
+  .nb-txt { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
+  .nb-lbl { font-family: var(--disp); font-weight: 600; font-size: 14.5px; letter-spacing: .22em;
+            white-space: nowrap; line-height: 1; color: var(--blue);
+            transition: color .16s linear, text-shadow .28s ease; }
+  .nb-code { font-size: 10.5px; letter-spacing: .28em; line-height: 1; color: var(--dim);
+             transition: color .16s linear; }
+  .nb:hover .nb-lbl { color: var(--hot); text-shadow: 0 0 14px rgba(240,115,31,.35); }
+  .nb:hover .nb-code { color: rgba(240,115,31,.7); }
+  .nb.open .nb-lbl { color: var(--accent); }
+  .nb.armed .nb-lbl { color: #FF7E33; text-shadow: 0 0 16px rgba(255,126,51,.6); }
+  .nb.open .nb-code, .nb.armed .nb-code { color: rgba(211,56,28,.85); }
+
+  .sw { position: relative; width: 44px; height: 52px; margin-top: 20px; perspective: 560px; flex: none; }
+  .sw span, .sw i { position: absolute; }
+  .sw-glow { inset: -8px; pointer-events: none; filter: blur(10px); opacity: 0;
+    background: radial-gradient(58% 52% at 50% 50%, var(--accent) 0%, rgba(0,0,0,0) 72%);
+    transition: opacity .25s ease, background .25s ease; }
+  .nb:hover .sw-glow { opacity: .5; }
+  .nb.armed .sw-glow { opacity: .6; animation: armPulse 2.8s ease-in-out infinite;
+    background: radial-gradient(58% 52% at 50% 50%, var(--armed) 0%, rgba(0,0,0,0) 72%); }
+  .sw-body { inset: 0; overflow: hidden;
+    background: linear-gradient(160deg,#191C1F 0%,#0D0F11 55%,#141719 100%);
+    clip-path: polygon(0 8px,8px 0,100% 0,100% calc(100% - 8px),calc(100% - 8px) 100%,0 100%); }
+  .sw-in  { inset: 1px; background: #0A0C0D; clip-path: var(--chamfer); }
+  .sw-lit { inset: 1px; clip-path: var(--chamfer); opacity: 0; transition: opacity .18s linear;
+    background: radial-gradient(130% 95% at 50% 112%, var(--accent) 0%, rgba(199,84,31,.42) 52%, rgba(199,84,31,0) 100%); }
+  .nb:hover .sw-lit { opacity: 1; }
+  .sw-well { inset: 6px; background: linear-gradient(180deg,#050607,#101315);
+    box-shadow: inset 0 2px 6px rgba(0,0,0,.95), inset 0 -1px 0 rgba(255,255,255,.06); }
+  .sw-slot { left: 50%; top: 50%; width: 15px; height: 36px; margin: -18px 0 0 -7.5px; border-radius: 8px;
+    background: linear-gradient(180deg,#030405,#0C0F11);
+    box-shadow: inset 0 1px 4px rgba(0,0,0,.95), inset 0 -1px 0 rgba(255,255,255,.05); }
+  .sw-pivot { left: 50%; top: 50%; width: 0; height: 0; }
+  .sw-lever { left: -4px; bottom: 0; width: 8px; height: 15px; border-radius: 3px 3px 1px 1px;
+    background: linear-gradient(90deg,#5A6167 0%,#E8ECEF 30%,#A6AEB4 62%,#454C51 100%);
+    transform-origin: 50% 100%; transform: rotate(0deg);
+    transition: transform .5s var(--ease), filter .3s ease; }
+  .nb.armed .sw-lever { transform: rotate(180deg); filter: drop-shadow(0 0 7px var(--armed)); }
+  .sw-lever i { left: -4px; top: -9px; width: 16px; height: 16px; border-radius: 50%;
+    background: radial-gradient(circle at 34% 28%,#F4F7F9 0%,#B4BCC2 38%,#767E85 66%,#3B4247 100%);
+    box-shadow: 0 3px 7px rgba(0,0,0,.85), inset 0 -2px 3px rgba(0,0,0,.35); }
+  .sw-base { left: 50%; top: 50%; width: 20px; height: 7px; margin: -3.5px 0 0 -10px; border-radius: 4px;
+    background: linear-gradient(180deg,#3A4046 0%,#171A1D 60%,#0A0C0D 100%);
+    box-shadow: 0 2px 4px rgba(0,0,0,.7); }
+  .sw-haz { left: 0; right: 0; bottom: 0; height: 3px;
+    background: repeating-linear-gradient(115deg, rgba(199,84,31,.55) 0 5px, rgba(0,0,0,0) 5px 10px); }
+
+  /* the guard lifts on open OR armed, so the group holding the current tab stays open-faced */
+  .sw-cover { inset: 4px; transform-style: preserve-3d; transform-origin: 50% 0%;
+    transform: rotateX(0deg); transition: transform .42s var(--ease); }
+  .nb.open .sw-cover, .nb.armed .sw-cover { transform: rotateX(-118deg); }
+  .sw-front { inset: 0; transform: translateZ(2px); }
+  .sw-face { inset: 0; clip-path: var(--chamfer);
+    background: linear-gradient(158deg,#7CC0F2 0%,#3E8FD6 46%,#173E5E 100%);
+    box-shadow: inset 0 0 0 1px rgba(150,205,255,.35), inset 0 1px 0 rgba(255,255,255,.4), 0 4px 14px rgba(0,0,0,.7);
+    transition: background .28s ease, box-shadow .28s ease; }
+  .nb.open .sw-face, .nb.armed .sw-face {
+    background: linear-gradient(158deg,#FF6A46 0%,#D3381C 46%,#6E1809 100%);
+    box-shadow: inset 0 0 0 1px rgba(255,150,120,.5), inset 0 1px 0 rgba(255,255,255,.4), 0 4px 14px rgba(0,0,0,.7); }
+  .sw-front .l1 { left: 0; right: 0; top: 12px; height: 1px; background: rgba(255,255,255,.28); }
+  .sw-front .l2 { left: 0; right: 0; top: 17px; height: 1px; background: rgba(0,0,0,.45); }
+  .sw-front .st { left: 0; right: 0; bottom: 7px; height: 6px; opacity: .45;
+    background: repeating-linear-gradient(115deg, rgba(0,0,0,.55) 0 4px, rgba(255,255,255,.12) 4px 8px);
+    transition: opacity .28s ease; }
+  .nb.open .sw-front .st, .nb.armed .sw-front .st { opacity: .9; }
+  .sw-front .dt { left: 6px; top: 5px; width: 3px; height: 3px; background: rgba(255,255,255,.35); }
+  .sw-rear { inset: 0; transform: rotateY(180deg) translateZ(2px); clip-path: var(--chamfer);
+    background: linear-gradient(180deg,#132A3D,#080F16); box-shadow: inset 0 0 12px rgba(0,0,0,.9);
+    transition: background .28s ease; }
+  .nb.open .sw-rear, .nb.armed .sw-rear { background: linear-gradient(180deg,#4A1409,#1B0805); }
+
+  /* ---------- dropdown panel ---------- */
+  .panel { position: absolute; top: calc(100% + 12px); left: -4px; width: 288px; overflow: hidden;
+    background: linear-gradient(180deg, rgba(22,25,28,.99), rgba(18,21,23,.99));
+    box-shadow: inset 0 0 0 1px rgba(75,156,226,.16), 0 0 0 1px rgba(0,0,0,.6), 0 28px 70px rgba(0,0,0,.85);
+    clip-path: polygon(0 12px,12px 0,100% 0,100% calc(100% - 12px),calc(100% - 12px) 100%,0 100%);
+    opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(-10px);
+    transition: opacity .16s linear, transform .3s var(--ease), visibility .16s, box-shadow .3s ease; }
+  .panel.open { opacity: 1; visibility: visible; pointer-events: auto; transform: translateY(0);
+    box-shadow: inset 0 0 0 1px rgba(75,156,226,.16), 0 0 0 1px rgba(0,0,0,.6),
+                0 28px 70px rgba(0,0,0,.85), 0 0 40px rgba(199,84,31,.12); }
+  .panel::before { content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .35;
+    background: repeating-linear-gradient(180deg, rgba(0,0,0,.5) 0 1px, transparent 1px 3px); }
+  .panel::after { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+    background: linear-gradient(90deg, var(--accent) 0%, rgba(199,84,31,.15) 100%); }
+  .panel-h, .panel-f { display: flex; align-items: center; justify-content: space-between;
+    font-size: 11.5px; letter-spacing: .3em; color: #5A646D; }
+  .panel-h { padding: 15px 18px 13px; border-bottom: 1px solid var(--line-soft); }
+  .panel-h b { font-weight: 400; letter-spacing: .22em; color: var(--accent); }
+  .panel-f { padding: 10px 18px; border-top: 1px solid var(--line-soft); letter-spacing: .26em; color: #3D464D; }
+  .prow { opacity: 0; transform: translateX(-8px);
+          transition: opacity .18s linear, transform .26s var(--ease); }
+  .panel.open .prow { opacity: 1; transform: translateX(0);
+                      transition-delay: calc(50ms + var(--i) * 30ms); }
+  .prow a { display: flex; align-items: center; gap: 14px; padding: 12px 18px; text-decoration: none;
+    font-size: 14.5px; letter-spacing: .06em; color: #AEB7BF; border-left: 2px solid rgba(75,156,226,.18);
+    transition: color .14s, background .14s, border-color .14s, padding-left .14s, letter-spacing .14s; }
+  .prow a:hover, .prow a.on { color: var(--hot); border-left-color: var(--hot);
+    padding-left: 26px; letter-spacing: .1em;
+    background: linear-gradient(90deg, rgba(199,84,31,.16), rgba(199,84,31,0)); }
+  .prow .n { font-size: 11.5px; color: #4A545C; letter-spacing: .12em; flex: none; width: 18px; }
+
+  /* ---------- layout ---------- */
+  .main { position: relative; z-index: 2; display: flex; flex: 1; min-height: 0; gap: 10px;
+          padding: 12px clamp(14px,3vw,32px) 14px; }
+  .wrap {
+    border: 1px solid var(--line); background: rgba(22,25,28,.72);
+    display: flex; flex-direction: column; min-height: 0; min-width: 0; flex: 1;
+  }
+
+  .body { display: flex; min-height: 0; flex: 1; }
+  .pane { flex: 1; overflow: auto; padding: 14px 16px; min-width: 0; }
+
+  /* :not(.nb) keeps these off the nav switches - button:hover would otherwise outrank .nb */
+  button:not(.nb) {
+    border: 1px solid rgba(255,150,120,.35); border-radius: 0; padding: 8px 14px; cursor: pointer;
+    background: linear-gradient(158deg,#FF6A46 0%,#D3381C 46%,#8E2010 100%); color: #140603;
+    font-family: var(--disp); font-size: 13px; font-weight: 700; white-space: nowrap;
+    letter-spacing: .16em; text-transform: uppercase;
+    clip-path: polygon(0 6px,6px 0,100% 0,100% calc(100% - 6px),calc(100% - 6px) 100%,0 100%);
+  }
+  button:not(.nb):hover { background: linear-gradient(158deg,#FF8A66 0%,#E4671F 46%,#A32812 100%); color: #000; }
+  button:not(.nb):disabled { opacity: .4; cursor: not-allowed; }
+  button.ghost { background: #101315; color: #AEB7BF; border-color: var(--line); }
+  button.ghost:hover { background: #171B1E; color: var(--hot); }
+
+  .category {
+    display: flex; align-items: center; gap: 10px;
+    background: #0A0C0D; color: var(--blue); font-family: var(--disp); font-weight: 700; font-size: 13px;
+    padding: 10px 12px; letter-spacing: .3em; text-transform: uppercase;
+    border: 1px solid var(--line); border-bottom: 0;
+  }
+  .category::before { content: ""; width: 6px; height: 6px; flex: none;
+    background: var(--accent); box-shadow: 0 0 10px var(--accent); }
+  .grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); border: 1px solid var(--line); border-bottom: 0; }
+  /* the form now lives in two thirds of the window, so it needs to fold earlier than 1100px */
+  @media (max-width: 1500px) { .grid { grid-template-columns: 1fr; } }
+  .grid.one { grid-template-columns: 1fr; }
+  .row {
+    display: grid; grid-template-columns: minmax(180px, 230px) minmax(0,1fr);
+    gap: 8px; align-items: center; padding: 8px 11px;
+    border-bottom: 1px solid var(--line-soft); border-right: 1px solid var(--line-soft);
+    background: rgba(25,29,32,.85); min-width: 0;
+  }
+  .row:nth-of-type(odd) { background: rgba(20,23,26,.85); }
+  .row.full { grid-column: 1 / -1; }
+  .lbl {
+    font-size: 12.5px; letter-spacing: .14em; text-transform: uppercase;
+    font-weight: 500; line-height: 1.3; color: #AEB7BF;
+  }
+  .lbl small { display: block; color: var(--muted); letter-spacing: .02em; text-transform: none; font-size: 12px; margin-top: 3px; }
+  input, select, textarea {
+    padding: 7px 9px; border: 1px solid var(--line); border-radius: 0; font-family: var(--mono);
+    font-size: 14px; min-width: 0; background: var(--input); color: var(--text); outline: none; width: 100%;
+  }
+  input[type="number"] { color: var(--hot); font-weight: 700; }
+  input:focus, select:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(199,84,31,.4); }
+  input[type="checkbox"] { width: auto; accent-color: var(--accent); height: 15px; }
+  textarea { resize: vertical; line-height: 1.5; }
+  .toggles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px,1fr)); gap: 2px 10px; padding: 10px; border: 1px solid var(--line); border-top: 0; background: rgba(19,22,24,.85); }
+  .toggles label { display: flex; align-items: center; gap: 7px; font-size: 12.5px; letter-spacing: .1em; text-transform: uppercase; padding: 3px 0; cursor: pointer; color: #AEB7BF; }
+
+  /* aspect ratio -> resolution drill-down: chips instead of two dropdowns, because the
+     whole grid is 12 values and showing them beats two rounds of clicking. */
+  .pick { display: flex; flex-direction: column; gap: 7px; }
+  .pick-row { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip { display: flex; align-items: center; gap: 8px; padding: 6px 10px; cursor: pointer;
+    border: 1px solid var(--line); background: #101315; color: #AEB7BF;
+    font-family: var(--disp); font-size: 12.5px; font-weight: 700; letter-spacing: .14em;
+    clip-path: polygon(0 5px,5px 0,100% 0,100% calc(100% - 5px),calc(100% - 5px) 100%,0 100%);
+    transition: color .14s, border-color .14s, background .14s; }
+  .chip:hover { color: var(--hot); border-color: var(--hot); }
+  .chip.on { color: #140603; border-color: rgba(255,150,120,.35);
+    background: linear-gradient(158deg,#FF6A46 0%,#D3381C 46%,#8E2010 100%); }
+  .chip i { display: block; flex: none; border: 1.5px solid currentColor; opacity: .8; }
+  .chip b { font-family: var(--mono); font-size: 13.5px; letter-spacing: .04em; }
+  .chip s { text-decoration: none; opacity: .62; font-size: 11.5px; letter-spacing: .1em; }
+
+  .drop {
+    border: 1px dashed rgba(75,156,226,.3); background: rgba(19,22,24,.7); padding: 16px; text-align: center;
+    font-size: 12px; letter-spacing: .24em; text-transform: uppercase; color: var(--muted); cursor: pointer;
+  }
+  .drop.hot { border-color: var(--hot); color: var(--hot); background: rgba(199,84,31,.08); }
+  .drop b { color: var(--text); letter-spacing: .08em; }
+  /* prompt library: the picker plus its four admin buttons, sitting above the prompt box */
+  .pbar { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
+  .pbar select { flex: 1; }
+  .pbar button { padding: 6px 9px; font-size: 11.5px; letter-spacing: .12em; }
+  /* .pbar prefix outruns button:not(.nb):hover, which would otherwise repaint all four orange */
+  .pbar button.p-new  { background: linear-gradient(158deg,#5FE08C 0%,#2E9E55 46%,#14562D 100%);
+                        border-color: rgba(120,240,170,.4); color: #04170C; }
+  .pbar button.p-new:hover  { background: linear-gradient(158deg,#7DEFA6 0%,#39B865 46%,#1A6C39 100%); }
+  .pbar button.p-edit { background: linear-gradient(158deg,#7CC0F2 0%,#3E8FD6 46%,#173E5E 100%);
+                        border-color: rgba(150,205,255,.4); color: #051726; }
+  .pbar button.p-edit:hover { background: linear-gradient(158deg,#9BD3FA 0%,#54A2E6 46%,#1E5079 100%); }
+  .pbar button.p-load { background: linear-gradient(158deg,#F0C24A 0%,#C7891F 46%,#5E3F09 100%);
+                        border-color: rgba(255,215,130,.4); color: #1B1203; }
+  .pbar button.p-load:hover { background: linear-gradient(158deg,#F8D471 0%,#DC9E2C 46%,#75500E 100%); }
+  .pbar button.p-del  { background: linear-gradient(158deg,#F0674A 0%,#B5231C 46%,#5A0C08 100%);
+                        border-color: rgba(255,140,120,.4); color: #240705; }
+  .pbar button.p-del:hover  { background: linear-gradient(158deg,#F98872 0%,#CF3327 46%,#74110C 100%); }
+  /* character count hangs under the label's hint, left of the box */
+  .pcount { display: block; margin-top: 5px; font-size: 12px; letter-spacing: .1em;
+            text-transform: none; color: var(--hot); }
+  .actions { display: flex; gap: 8px; padding: 12px 0 4px; flex-wrap: wrap; align-items: center; }
+  .note { font-size: 12.5px; color: var(--muted); letter-spacing: .1em; }
+  .note.warn { color: var(--warning); }
+  .note.bad { color: var(--armed); }
+
+  /* ---------- publisher plate ---------- */
+  /* A provider now owns a page rather than a tab, so the first thing on that page has to
+     say whose page it is. The wordmark carries their own colours and sticks to the top of
+     the scroll area, so a long form scrolling past never leaves the page unlabelled.
+     top:-14px, not 0: the sticky rectangle is the pane's padding box, and without the
+     offset the plate would drop 14px on first scroll and let content run under the gap. */
+  .pub {
+    position: sticky; top: -14px; z-index: 6;
+    margin: -14px -16px 12px; padding: 20px 16px 13px; text-align: center;
+    border-bottom: 1px solid var(--line);
+    background:
+      radial-gradient(120% 160% at 50% 0%, var(--pub-glow) 0%, rgba(0,0,0,0) 72%),
+      linear-gradient(180deg, #0B0E10 0%, #090B0C 100%);
+  }
+  .pub-mark {
+    font-family: var(--disp); font-weight: 700; line-height: 1;
+    font-size: clamp(28px, 4vw, 44px); letter-spacing: .13em;
+    background: linear-gradient(96deg, var(--pub-a) 0%, var(--pub-b) 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    filter: drop-shadow(0 0 22px var(--pub-glow));
+  }
+  .pub-mark span { font-weight: 500; letter-spacing: .3em; opacity: .78; margin-left: .22em; }
+  .pub-sub { margin-top: 9px; font-size: 11px; letter-spacing: .3em; text-transform: uppercase; color: var(--muted); }
+  .pub-pick { margin-top: 14px; display: flex; justify-content: center; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .pub-pick label { font-size: 11px; letter-spacing: .28em; text-transform: uppercase; color: var(--muted); }
+  .pub-pick select {
+    width: auto; min-width: 270px; border-color: var(--pub-a); color: var(--text);
+    font-family: var(--disp); font-weight: 600; letter-spacing: .14em;
+  }
+  .pub-pick select:focus { border-color: var(--pub-b); box-shadow: 0 0 0 1px var(--pub-glow); }
+  /* Each provider's palette, one line each to retune. */
+  .pub-kling    { --pub-a:#9B6BFF; --pub-b:#FF4FD8; --pub-glow:rgba(155,107,255,.20); }
+  .pub-byteplus { --pub-a:#2E7BFF; --pub-b:#25E0D6; --pub-glow:rgba(46,123,255,.18); }
+  .pub-fal      { --pub-a:#FFFFFF; --pub-b:#8E99A4; --pub-glow:rgba(255,255,255,.10); }
+
+  /* console */
+  /* right-hand column, one third of the window - the form is the wide half */
+  .console { position: relative; border: 1px solid var(--line); background: rgba(22,25,28,.72);
+             display: flex; flex-direction: column; flex: 0 0 33.333%; min-width: 0; }
+  /* drag the left edge to trim the console; past the minimum it snaps shut */
+  .c-grip { position: absolute; left: -6px; top: 0; bottom: 0; width: 11px; z-index: 60; cursor: col-resize; }
+  .c-grip::after {
+    content: ""; position: absolute; left: 5px; top: 0; bottom: 0; width: 1px;
+    background: transparent; transition: background .12s var(--ease);
+  }
+  .c-grip:hover::after, body.c-drag .c-grip::after { background: var(--hot); box-shadow: 0 0 6px var(--hot); }
+  body.c-drag { cursor: col-resize; user-select: none; }
+  .console-head {
+    display: flex; align-items: center; gap: 8px; background: #121517;
+    border-bottom: 1px solid var(--line); padding: 7px 12px;
+    flex-wrap: wrap;   /* narrow drag widths would otherwise clip Copy off the end */
+  }
+  .console-head h2 { font-family: var(--disp); font-size: 13px; margin: 0; letter-spacing: .3em; text-transform: uppercase; color: var(--blue); }
+  .console-head .sp { margin-left: auto; display: flex; gap: 6px; }
+  .console-head button { padding: 4px 9px; font-size: 11.5px; }
+  /* collapsed = gone entirely; the header badge is the only way back */
+  body.no-console .console { display: none; }
+  /* button:not(.nb) outranks .badge, so the badge look is restated here */
+  button.badge.tog {
+    background: #0A0C0D; color: var(--muted); border: 1px solid var(--line);
+    padding: 5px 9px; clip-path: none; font-family: var(--mono); font-size: 13px;
+    letter-spacing: normal; text-transform: none;
+  }
+  button.badge.tog:hover { background: #121517; color: var(--hot); border-color: var(--hot); }
+  #log { flex: 1; overflow: auto; background: #0D1012; padding: 8px 12px; font-size: 13px; line-height: 1.55; }
+  .ln { white-space: pre-wrap; word-break: break-word; border-bottom: 1px solid rgba(255,255,255,.04); padding: 2px 0; }
+  .ln .ts { color: #4A545C; }
+  .ln .k { font-weight: 700; letter-spacing: .1em; }
+  .k-req { color: var(--warning); } .k-res { color: var(--blue); }
+  .k-err { color: var(--armed); }   .k-sys { color: #5A646D; }
+  .k-hook { color: var(--hot); }    .k-warn { color: var(--warning); }
+  .k-out { color: #4A545C; }
+  .ln pre { margin: 3px 0 3px 18px; color: #8A939B; font-size: 12.5px; white-space: pre-wrap; word-break: break-word; border-left: 2px solid rgba(75,156,226,.2); padding-left: 8px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 9px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+  th { background: #121517; letter-spacing: .2em; text-transform: uppercase; font-size: 11.5px; color: var(--blue); }
+  td.mono { color: var(--muted); word-break: break-all; }
+  .pill { padding: 2px 7px; font-weight: 700; font-size: 11.5px; letter-spacing: .12em; }
+  .p-live { background: var(--blue); color: #06202f; }
+  .p-err  { background: var(--armed); color: #2a0b08; }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px,1fr)); gap: 10px; }
+  .card { border: 1px solid var(--line); background: var(--panel); }
+  .card img, .card video { width: 100%; display: block; background: #0D1012; }
+  .card .meta { padding: 7px 9px; font-size: 12px; color: var(--muted); letter-spacing: .06em; word-break: break-all; }
+  .card .meta b { color: var(--hot); display: block; letter-spacing: .16em; }
+  .hide { display: none !important; }
+</style>
+</head>
+<body>
+
+<header class="hdr">
+  <div class="hdr-in">
+    <div class="brand">
+      <a href="#"><span class="b1">Pixel</span> <span class="b2">Slinger</span></a>
+      <small>SYS-04//NODE</small>
+    </div>
+    <span class="badges">
+      <span class="badge" id="b-key">ENHANCOR KEY ?</span>
+      <span class="badge" id="b-fal">FAL.AI KEY ?</span>
+      <span class="badge" id="b-ark">BYTEPLUS KEY ?</span>
+      <span class="badge" id="b-kling">KLING KEY ?</span>
+      <span class="badge" id="b-tun">TUNNEL ?</span>
+    </span>
+  </div>
+  <div class="hdr-bar">
+    <nav id="nav"></nav>
+    <button class="badge tog" id="b-con" title="Show/hide the console panel">CONSOLE ON</button>
+  </div>
+  <div class="crawl"></div>
+</header>
+
+<div class="main">
+  <div class="wrap">
+    <div class="row full" style="border-bottom:1px solid var(--line)">
+      <div class="lbl">Save folder<small>paste a local path - results land here as &lt;model&gt;_&lt;input filename&gt;. Blank = outputs/</small></div>
+      <div><input id="out-dir" placeholder="D:\Photos\shoot-01"></div>
+    </div>
+
+    <div class="row full" style="border-bottom:1px solid var(--line)">
+      <div class="lbl">Post-gen scripts<small id="pg-hint"></small></div>
+      <div id="postgen-vid"></div>
+      <div id="postgen-img" style="margin-top:8px"></div>
+    </div>
+
+    <div class="body">
+      <div class="pane" id="pane"></div>
+    </div>
+  </div>
+
+  <div class="console">
+    <div class="c-grip" id="c-grip" title="Drag to resize - drag shut to hide"></div>
+    <div class="console-head">
+      <h2>Console</h2>
+      <span class="note" id="c-count">0 lines</span>
+      <span class="sp">
+        <button class="ghost" id="c-wrap">Bodies: off</button>
+        <button class="ghost" id="c-clear">Clear</button>
+        <button class="ghost" id="c-copy">Copy</button>
+      </span>
+    </div>
+    <div id="log"></div>
+  </div>
+</div>
+
+<script>
+const API = "https://apireq.enhancor.ai/api";
+// BytePlus ModelArk is regional and this account sits in ap-southeast-1: no other
+// host will answer for it, and the region is not a path or a header, it is the host.
+const ARK = "https://ark.ap-southeast.bytepluses.com/api/v3";
+// Kling AI's own platform. api.klingai.com answers as well, but this key was issued in
+// Singapore and task ids are regional - a job created here is invisible from the other host.
+const KLING = "https://api-singapore.klingai.com";
+// Enhancor.ai is switched off. Every service below that still carries `base` (i.e. posts
+// to apireq.enhancor.ai) keeps its definition but is dropped from the nav, so nothing can
+// be reached or sent. Flip this to true to bring the whole set back.
+const ENHANCOR_ON = false;
+let CFG = { hasKey:false, tunnel:"?", publicBase:"" };
+let SHOW_BODIES = false;
+let LINES = 0;
+
+/* ---------- console ---------- */
+const logEl = document.getElementById("log");
+function pushLine(ev){
+  if (ev.meta && ev.meta.bodyOnly && !SHOW_BODIES) return;   // subprocess output: terminal always, page only with Bodies on
+  const d = document.createElement("div");
+  d.className = "ln";
+  let html = `<span class="ts">${ev.t}</span> <span class="k k-${ev.kind}">${ev.kind.toUpperCase()}</span> ${esc(ev.text)}`;
+  if (SHOW_BODIES && ev.meta && (ev.meta.body !== undefined || ev.meta.headers)){
+    let parts = [];
+    if (ev.meta.headers) parts.push("headers " + JSON.stringify(ev.meta.headers));
+    if (ev.meta.body !== undefined && ev.meta.body !== null)
+      parts.push(typeof ev.meta.body === "string" ? ev.meta.body : JSON.stringify(ev.meta.body, null, 2));
+    if (parts.length) html += `<pre>${esc(parts.join("\n"))}</pre>`;
+  }
+  d.innerHTML = html;
+  const stuck = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 40;
+  logEl.appendChild(d);
+  LINES++; document.getElementById("c-count").textContent = LINES + " lines";
+  if (stuck) logEl.scrollTop = logEl.scrollHeight;
+  while (logEl.children.length > 1200) logEl.removeChild(logEl.firstChild);
+}
+function local(kind, text, meta){
+  pushLine({ t:new Date().toTimeString().slice(0,8), kind, text, meta });
+}
+function esc(s){ return String(s).replace(/[&<>]/g, c=>({ "&":"&amp;","<":"&lt;",">":"&gt;" }[c])); }
+
+new EventSource("/events").onmessage = e => pushLine(JSON.parse(e.data));
+document.getElementById("c-clear").onclick = ()=>{ logEl.innerHTML=""; LINES=0; document.getElementById("c-count").textContent="0 lines"; };
+document.getElementById("c-copy").onclick = ()=> navigator.clipboard.writeText(logEl.innerText);
+document.getElementById("c-wrap").onclick = e =>{ SHOW_BODIES=!SHOW_BODIES; e.target.textContent="Bodies: "+(SHOW_BODIES?"on":"off"); };
+
+/* ---------- transport ---------- */
+async function post(path, body){
+  const r = await fetch(path, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body) });
+  return r.json();
+}
+async function callApi(url, body, opts={}){
+  return post("/api/call", { url, body, method: opts.method || "POST", autoWebhook: opts.autoWebhook !== false });
+}
+async function uploadFile(file){
+  local("sys", `reading ${file.name} (${Math.round(file.size/1024)} KB)`);
+  const data = await new Promise((res,rej)=>{ const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=rej; fr.readAsDataURL(file); });
+  const r = await post("/api/upload", { name:file.name, data });
+  if (r.error){ local("err","upload failed: "+r.error); return null; }
+  if (!r.reachable) local("warn","tunnel is down - the provider cannot fetch this URL. Start cloudflared, then restart the server.");
+  return r;
+}
+
+/* ---------- config ---------- */
+async function refreshConfig(){
+  CFG = await (await fetch("/api/config")).json();
+  const k = document.getElementById("b-key"), t = document.getElementById("b-tun"),
+        f = document.getElementById("b-fal"), a = document.getElementById("b-ark"),
+        kl = document.getElementById("b-kling");
+  // With Enhancor off, its key is not a fault worth flagging - hide the badge entirely.
+  k.style.display = ENHANCOR_ON ? "" : "none";
+  k.textContent = CFG.hasKey ? "ENHANCOR KEY "+CFG.keyHint : "ENHANCOR KEY MISSING";
+  k.className = "badge " + (CFG.hasKey ? "ok" : "bad");
+  a.textContent = CFG.hasArkKey ? "BYTEPLUS KEY "+CFG.arkKeyHint : "BYTEPLUS KEY MISSING";
+  a.className = "badge " + (CFG.hasArkKey ? "ok" : "bad");
+  f.textContent = CFG.hasFalKey ? "FAL.AI KEY "+CFG.falKeyHint : "FAL.AI KEY MISSING";
+  f.className = "badge " + (CFG.hasFalKey ? "ok" : "bad");
+  kl.textContent = CFG.hasKlingKey ? "KLING KEY "+CFG.klingKeyHint : "KLING KEY MISSING";
+  kl.className = "badge " + (CFG.hasKlingKey ? "ok" : "bad");
+  pgBuild(CFG.postgenVideo || [], CFG.postgenImage || [], CFG.maxPostgen || 3);
+  t.textContent = "TUNNEL " + CFG.tunnel.toUpperCase();
+  t.className = "badge " + ({up:"ok", starting:"warn", missing:"bad", down:"bad", off:"warn"}[CFG.tunnel] || "");
+}
+refreshConfig(); setInterval(refreshConfig, 5000);
+
+/* ---------- console: drag-resize, drag shut ---------- */
+const conBtn = document.getElementById("b-con");
+const conEl  = document.querySelector(".console");
+const conGrip = document.getElementById("c-grip");
+const CON_MIN = 160;   // below this the panel is too narrow to read, so it snaps shut instead
+
+function conSet(off){
+  document.body.classList.toggle("no-console", off);
+  conBtn.textContent = off ? "CONSOLE OFF" : "CONSOLE ON";
+  localStorage.setItem("conOff", off ? "1" : "");
+}
+const savedW = +localStorage.getItem("conW");
+if (savedW >= CON_MIN) conEl.style.flexBasis = savedW + "px";
+conSet(localStorage.getItem("conOff") === "1");
+conBtn.onclick = ()=> conSet(!document.body.classList.contains("no-console"));
+
+/* window-level move/up rather than setPointerCapture - capture silently no-ops
+   for synthetic pointers, and this survives the cursor leaving the 11px grip */
+let conDrag = false;
+function conDragEnd(){ conDrag = false; document.body.classList.remove("c-drag"); }
+conGrip.addEventListener("pointerdown", e=>{
+  e.preventDefault();
+  conDrag = true;
+  document.body.classList.add("c-drag");
+});
+window.addEventListener("pointermove", e=>{
+  if (!conDrag) return;
+  const w = Math.min(conEl.getBoundingClientRect().right - e.clientX, window.innerWidth * .75);
+  if (w < CON_MIN) { conSet(true); conDragEnd(); return; }   // dragged shut - the badge brings it back
+  conEl.style.flexBasis = Math.round(w) + "px";
+  localStorage.setItem("conW", Math.round(w));
+});
+window.addEventListener("pointerup", conDragEnd);
+window.addEventListener("pointercancel", conDragEnd);
+
+/* ---------- save folder ---------- */
+const dirEl = document.getElementById("out-dir");
+dirEl.value = localStorage.getItem("outDir") || "";
+dirEl.oninput = ()=> localStorage.setItem("outDir", dirEl.value.trim());
+const outDir = ()=> dirEl.value.trim();
+
+/* ---------- post-gen scripts ---------- */
+// Two independent rows: videos get three slots to chain, images get one. Each drop-down
+// offers every line of its own kind in .env plus "no script", and the slot number is the
+// order they run in. The picks live in localStorage - this is a setting, not something to
+// choose per job. Adding a script means adding a line to .env: the lists here are whatever
+// the server read on its last /api/config.
+const pgVidEl = document.getElementById("postgen-vid");
+const pgImgEl = document.getElementById("postgen-img");
+let pgSig = "";
+function pgRow(el, title, list, slots, store, empty){
+  el.innerHTML = list.length ? `<span class="note" style="margin-right:10px">${title}</span>` :
+    `<span class="note">${empty}</span>`;
+  for (let i = 1; list.length && i <= slots; i++){
+    const wrap = document.createElement("label");
+    wrap.style.cssText = "display:inline-flex;align-items:center;gap:6px;margin:0 14px 0 0";
+    if (slots > 1) wrap.appendChild(document.createTextNode(String(i)));
+    const sel = document.createElement("select");
+    sel.style.width = "auto";
+    sel.innerHTML = `<option value="">- no script -</option>` +
+      list.map(x => `<option value="${esc(x.key)}">${esc(x.label)}</option>`).join("");
+    const saved = localStorage.getItem(store + i) || "";
+    // A script removed from .env must not keep running from a stale localStorage pick.
+    sel.value = list.some(x => x.key === saved) ? saved : "";
+    sel.onchange = ()=> localStorage.setItem(store + i, sel.value);
+    wrap.appendChild(sel);
+    el.appendChild(wrap);
+  }
+}
+function pgBuild(vid, img, max){
+  const sig = JSON.stringify([vid, img, max]);
+  if (sig === pgSig) return;            // rebuilding would drop a selection mid-change
+  pgSig = sig;
+  pgRow(pgVidEl, "video", vid, max, "postvidgen",
+        "no POSTVIDGEN_n lines in .env - saved videos are left alone");
+  pgRow(pgImgEl, "image", img, 1, "postimggen",
+        "no POSTIMGGEN_n lines in .env - saved images are left alone");
+}
+// Which row a tab shows: video generators chain video scripts, the editors run the image
+// one. The gallery holds both kinds of result, so it shows both rows.
+// The hint describes only what is on screen - slot order is a video idea and reads as
+// noise on a tab that offers a single image script.
+const PG_HINT = {
+  vid: "run on the saved video, in slot order - each one is handed what the last produced. "
+     + "Blank = none. The list comes from the POSTVIDGEN_n lines in .env",
+  img: "runs on the saved image. Blank = none. The list comes from the POSTIMGGEN_n lines in .env",
+  both: "run on whatever is saved: videos go through the video row in slot order, each one "
+      + "handed what the last produced; images go through the one image script. Blank = none. "
+      + "The lists come from the POSTVIDGEN_n and POSTIMGGEN_n lines in .env",
+};
+const pgHintEl = document.getElementById("pg-hint");
+function pgShow(id){
+  const grp = GROUPS.find(g => g.items.some(([n])=> n === id));
+  const isVid = !grp || /VIDEO/.test(grp.label);
+  const showImg = !grp || !isVid;
+  pgVidEl.style.display = isVid ? "" : "none";
+  pgImgEl.style.display = showImg ? "" : "none";
+  pgHintEl.textContent = isVid && showImg ? PG_HINT.both : isVid ? PG_HINT.vid : PG_HINT.img;
+}
+// Slot order, blanks dropped - exactly what the server will run, in that order. The saved
+// file decides which row applies, and a row the current tab hides runs nothing, so a stale
+// pick on the other row cannot fire on a tab that never offered it.
+const postGen = (isVid)=>{
+  const el = isVid ? pgVidEl : pgImgEl;
+  return el.style.display === "none" ? [] :
+    [...el.querySelectorAll("select")].map(x=>x.value).filter(Boolean);
+};
+
+/* ---------- field spec ---------- */
+const AREAS = {
+  background:false, skin:false, nose:false, eye_g:false, r_eye:true, l_eye:true,
+  r_brow:false, l_brow:false, r_ear:true, l_ear:true, mouth:true, u_lip:true,
+  l_lip:true, hair:false, hat:false, ear_r:false, neck_l:false, neck:false, cloth:false
+};
+
+// Enhancement modes are version-gated server-side: sending "heavy" with v3 is a
+// hard 400. Empty list = the endpoint ignores the field for that version.
+const SKIN_MODES = {
+  enhancorv1: ["standard","heavy"],
+  enhancorv3: ["standard"],
+  enhancorv4: [],
+  enhancorv4_base: ["standard"],
+};
+const isV4 = s => s.model_version === "enhancorv4";
+const isV3 = s => s.model_version === "enhancorv3";
+
+// Video: `mode` only exists for image-to-video, so every mode gate has to check both.
+const isI2V = s => s.type === "image-to-video";
+const vmode = (s, m) => isI2V(s) && s.mode === m;
+// Seedance 2.5 and Kling have no `type` - mode alone picks the workflow.
+const smode = (s, ...m) => m.includes(s.mode);
+
+/* ---------- BytePlus video models ---------- */
+// Every Seedance model on ModelArk takes the same request: scalars at the top level of
+// the body, media in a `content` array of typed parts, each with the job it does in the
+// shot. Only the caps differ, so one builder covers all five.
+const arkShape = b => {
+  const c = [];
+  if (b.prompt) c.push({ type:"text", text:b.prompt });
+  const add = (v, type, role) => (Array.isArray(v) ? v : [v]).forEach(url => {
+    const part = { type }; part[type] = { url }; if (role) part.role = role;
+    c.push(part);
+  });
+  if (b.first_frame_image) add(b.first_frame_image, "image_url", "first_frame");
+  if (b.last_frame_image)  add(b.last_frame_image,  "image_url", "last_frame");
+  if (b.images) add(b.images, "image_url", "reference_image");
+  if (b.videos) add(b.videos, "video_url", "reference_video");
+  if (b.audios) add(b.audios, "audio_url", "reference_audio");
+  ["prompt","first_frame_image","last_frame_image","images","videos","audios"].forEach(k => delete b[k]);
+  b.content = c;
+};
+
+// `refs: false` is not a tidier form, it is a different model: 1.5-pro takes a first and
+// an optional last frame and nothing else, and the reference lists are mutually exclusive
+// with them. A box the API will reject is worse than no box.
+const arkVideo = (model, o) => ({
+  title: `${o.title} - ${model}`,
+  ark: `${ARK}/contents/generations/tasks`, model, abbr: o.abbr,
+  shape: arkShape,
+  results: j => (j.content && j.content.video_url) ? [j.content.video_url] : [],
+  fields: [
+    ["prompt","textarea","Prompt",{def:"",rows:4,
+      hint:"required - give every reference an explicit job ([Image 1] is the woman...); "
+         + "split shots with time codes [0-4s]: ... [4-8s]: ... . Negative phrasing does not work"}],
+    ["first_frame_image","file","First frame",{hint:"optional - the frame the video opens on"}],
+    ["last_frame_image","file","Last frame",{hint:"optional - needs a first frame"}],
+    ["images","files","Reference images",{hint:`max ${o.imgs} - addressed as [Image 1], [Image 2]...`}],
+    // Reference videos are the one input the API will not take as an upload of its own;
+    // ours are URLs on the tunnel already, which is exactly what it wants.
+    ["videos","files","Reference videos",{hint:`max ${o.vids}, ${o.secs}s combined - URLs only`}],
+    ["audios","files","Reference audio",{hint:`max ${o.auds}, ${o.secs}s combined - wav/mp3`}],
+    ["resolution","select","Resolution",{opts:o.res, def:"720p", hint:o.resHint}],
+    ["ratio","select","Aspect ratio",{opts:["16:9","4:3","1:1","3:4","9:16","21:9","adaptive"],def:"9:16",
+      hint:"adaptive keeps the reference's framing - required for edit / extend / first-frame work"}],
+    ["duration","number","Duration (s)",{def:o.dur[0],min:o.dur[1],max:o.dur[2],hint:o.durHint}],
+    ["generate_audio","bool","Generate audio",{def:o.audio !== false}],
+    // Documented on ModelArk for Seedance 1.5 pro and the 1.0 pro pair only - the 2.x
+    // models are not on their supported list, and ModelArk ignores an unknown field
+    // rather than refusing it, so a box on those tabs would read as set while doing
+    // nothing. `camera` gates it to the tabs whose model actually takes it.
+    ["camera_fixed","bool","Fix camera",{def:true,
+      hint:"appends a fixed-camera instruction to the prompt server-side - their docs do "
+         + "not guarantee the result. Not supported alongside reference images"}],
+    ["watermark","bool","Watermark",{def:false}],
+    ["return_last_frame","bool","Return last frame",{def:false,
+      hint:"hands back the closing frame at full resolution, for chaining the next clip"}],
+    ["seed","number","Seed",{def:"",min:-1,max:2147483647,hint:"optional - blank is random"}],
+  ].filter(([n]) =>
+    // `refs: false` is not a tidier form, it is a different model - see above.
+    !(o.refs === false && ["images","videos","audios"].includes(n)) &&
+    !(n === "camera_fixed" && !o.camera))
+});
+
+const arkVideos = {
+  // 2.5 is gated behind a prepaid resource pack on top of account balance: without one
+  // every call comes back ModelNotOpen rather than a validation error.
+  bpsd25: arkVideo("dreamina-seedance-2-5-260628", {
+    title:"Dreamina-Seedance-2.5", abbr:"bs25", res:["480p","720p"],
+    imgs:30, vids:10, auds:10, secs:30, dur:[12,-1,30],
+    durHint:"4-30, or -1 for auto - edits are fixed at -1 and need aspect ratio adaptive"}),
+  bpsd20mini: arkVideo("dreamina-seedance-2-0-mini-260615", {
+    title:"Dreamina-Seedance-2.0-mini", abbr:"bs20m", res:["480p","720p"],
+    imgs:9, vids:3, auds:3, secs:15, dur:[12,4,15], durHint:"4-15"}),
+  bpsd20: arkVideo("dreamina-seedance-2-0-260128", {
+    title:"Dreamina-Seedance-2.0", abbr:"bs20", res:["480p","720p","1080p","4k"],
+    resHint:"4k is 10-bit and rate limited hard - 15 rpm, concurrency 1",
+    imgs:9, vids:3, auds:3, secs:15, dur:[12,4,15], durHint:"4-15"}),
+  bpsd20fast: arkVideo("dreamina-seedance-2-0-fast-260128", {
+    title:"Dreamina-Seedance-2.0-fast", abbr:"bs20f", res:["480p","720p"],
+    imgs:9, vids:3, auds:3, secs:15, dur:[12,4,15], durHint:"4-15"}),
+  // 1.5-pro predates the multi-reference envelope: first frame, optional last frame,
+  // and no reference lists at all.
+  bpsd15pro: arkVideo("seedance-1-5-pro-251215", {
+    title:"ByteDance-Seedance-1.5-pro", abbr:"bs15", res:["480p","720p","1080p"],
+    refs:false, dur:[5,4,12], durHint:"4-12",
+    // Set to match the fal tab of the same model, for back-to-back runs.
+    camera:true, audio:false}),
+};
+
+/* ---------- Kling AI video models ---------- */
+// Kling's own platform runs two request shapes behind the one host:
+//   3.0 / 3.0 Omni / O1 / 2.6 / 2.5 Turbo -> POST /<capability>/<model-id>, every input a
+//     typed part in `contents`, the knobs split across `settings` and `options`
+//   2.1 Master                            -> POST /v1/videos/image2video, the older flat
+//     body keyed by model_name; it is the only one of the six still on that route
+// Both hand back a task id that the single GET /tasks?task_ids= poller reads, so one
+// tracker covers the lot. Fields, enums and limits are from Kling's own API reference,
+// checked against the live validator on 21/08/2026 - where the two disagreed (2.1 Master's
+// cfg_scale, and its refusal of image_tail / camera control / motion brush / 4k) the
+// validator won.
+
+const KL_DUR = ["3","4","5","6","7","8","9","10","11","12","13","14","15"];
+const KL_SETTINGS = ["multi_shot","audio","resolution","aspect_ratio","duration","character_orientation"];
+// Motion control is a second endpoint on the same model rather than a model of its own, so
+// it rides as a mode on the 3.0 and 2.6 tabs and swaps the path out from under them.
+const isMC  = s => s.mode === "motion-control";
+const notMC = s => s.mode !== "motion-control";
+const KL_MODE = ["mode","select","Mode",{opts:["image-to-video","motion-control"],
+  def:"image-to-video", rerender:true,
+  hint:"motion control drives a still portrait with the movement of a reference video"}];
+// The tail every Kling tab ends with. watermark_info is always sent - their default is
+// already false, so this is only ever a request for the extra watermarked copy.
+const KL_OPTS = [
+  ["watermark","bool","Watermark",{def:false,hint:"asks for a watermarked copy alongside the clean one"}],
+  ["external_task_id","text","External task ID",{def:"",
+    hint:"optional - your own id for this job; must be unique across the account"}],
+];
+const KL_ELEM_HINT = 'optional [{"element_id":"123","id":"Zhang"}] - element_id comes from '
+  + 'Kling’s element library, id is the name @Zhang in the prompt resolves to';
+
+const klingShape = b => {
+  const c = [];
+  // The omni models resolve @image_1 / @video_1 in the prompt against these ids; the plain
+  // image-to-video endpoints ignore the field, so one numbering scheme serves both.
+  const media = (v, type, id) => (Array.isArray(v) ? v : [v]).forEach((url, i) => {
+    const part = { type, url };
+    if (id) part.id = id.replace("#", i + 1);
+    c.push(part);
+  });
+  if (b.prompt) c.push({ type:"prompt", text:b.prompt });
+  if (b.first_frame)   media(b.first_frame,   "first_frame");
+  if (b.last_frame)    media(b.last_frame,    "last_frame");
+  if (b.image)         media(b.image,         "image");
+  if (b.video)         media(b.video,         "video");
+  if (b.refer_image)   media(b.refer_image,   "refer_image",   "image_#");
+  if (b.feature_video) media(b.feature_video, "feature_video", "video_#");
+  if (b.base_video)    media(b.base_video,    "base_video",    "video_#");
+  (b.elements || []).forEach(e => c.push(Object.assign({ type:"element" }, e)));
+  (b.voices   || []).forEach(v => c.push(Object.assign({ type:"voice"   }, v)));
+
+  const settings = {}, options = { watermark_info: { enabled: !!b.watermark } };
+  KL_SETTINGS.forEach(k => { if (b[k] !== undefined && b[k] !== "") settings[k] = b[k]; });
+  // duration is an int on these routes - a string only on 2.1 Master's legacy one - and a
+  // select hands back a string either way, so it is normalised here rather than on each
+  // of the five field specs.
+  if (settings.duration !== undefined) settings.duration = Number(settings.duration);
+  if (b.external_task_id) options.external_task_id = b.external_task_id;
+  Object.keys(b).forEach(k => delete b[k]);
+  b.contents = c;
+  if (Object.keys(settings).length) b.settings = settings;
+  b.options = options;
+};
+
+const klingVideos = {
+  k30: {
+    title: "Kling 3.0 - image to video / motion control",
+    kling: s => isMC(s) ? "/motion-control/kling-3.0" : "/image-to-video/kling-3.0",
+    abbr: s => isMC(s) ? "k30mc" : "k30",
+    shape: klingShape,
+    fields: [
+      KL_MODE,
+      ["prompt","textarea","Prompt",{def:"",rows:4,
+        hint:"up to 3072 chars, 2500 recommended. Multi-shot format \"shot 1, 5, wide street at dusk; "
+           + "shot 2, 3, close on her face;\" - up to 6 shots, each at least 1s, durations summing to "
+           + "the total. @name references an element"}],
+      ["first_frame","file","First frame",{when:notMC,
+        hint:"required - jpg/png, max 50 MB, at least 300px a side, aspect 1:2.5 to 2.5:1"}],
+      ["last_frame","file","Last frame",{when:notMC,
+        hint:"optional - needs a first frame; last-frame-only is not supported"}],
+      ["image","file","Appearance image",{when:isMC,
+        hint:"required - the character the output looks like. Head and upper body clear and unobstructed"}],
+      ["video","file","Motion video",{when:isMC,
+        hint:"required - mp4/mov, max 100 MB, one continuous take of a single person. Up to 30s, or 10s "
+           + "when the orientation follows the image"}],
+      ["character_orientation","select","Character orientation",{opts:["video","image"],def:"video",when:isMC,
+        hint:"required - which input the facing follows. With an element it always follows the video"}],
+      ["elements","json","Elements",{def:"",rows:3,
+        hint:KL_ELEM_HINT + ". Max 3, or 1 in motion control"}],
+      ["multi_shot","bool","Multi-shot",{def:true,when:notMC,
+        hint:"off renders a multi-shot prompt as a single shot"}],
+      ["audio","select","Audio",{
+        optsBy: s => isMC(s) ? ["original","off"] : ["native","off"],
+        by: s => isMC(s) ? {def:"original"} : {def:"off"},
+        hint:"native is a generated soundtrack, original keeps the motion video's own sound"}],
+      ["resolution","select","Resolution",{def:"720p",
+        optsBy: s => isMC(s) ? ["720p","1080p"] : ["720p","1080p","4k"]}],
+      ["duration","select","Duration (s)",{opts:KL_DUR,def:"5",when:notMC,
+        hint:"motion control has no duration - the output follows the reference video"}],
+      ...KL_OPTS,
+    ]
+  },
+  k30omni: {
+    // The Omni tab is the video-omni endpoint: same model family, but it also takes
+    // reference images and a reference video, and can edit a base clip.
+    title: "Kling 3.0 Omni - omni video",
+    kling: "/omni-video/kling-3.0-omni", abbr: "k30o", shape: klingShape,
+    fields: [
+      ["prompt","textarea","Prompt",{def:"",rows:4,
+        hint:"up to 3072 chars. @image_1 / @video_1 address the references below and @name an element. "
+           + "Multi-shot format \"shot 1, 5, ...; shot 2, 3, ...;\" - up to 6 shots"}],
+      ["first_frame","file","First frame",{hint:"optional - the frame the video opens on"}],
+      ["last_frame","file","Last frame",{hint:"optional - needs a first frame; last-frame-only is not supported"}],
+      ["refer_image","files","Reference images",{
+        hint:"@image_1, @image_2... - scene, style or subject references. Reference images plus "
+           + "multi-image elements: max 7, or max 4 once a reference video is in play"}],
+      ["feature_video","file","Feature video",{
+        hint:"optional - motion/style reference. mp4/mov, max 200 MB, 3-15.5s, 700-4553px a side. "
+           + "Rules out native audio"}],
+      ["base_video","file","Base video",{
+        hint:"optional - the clip to edit. Rules out first/last frame, multi-shot and native audio"}],
+      ["elements","json","Elements",{def:"",rows:3,
+        hint:KL_ELEM_HINT + ". Video-character and multi-image elements have different caps - see their guide"}],
+      ["multi_shot","bool","Multi-shot",{def:true,hint:"off renders a multi-shot prompt as a single shot"}],
+      ["audio","select","Audio",{opts:["off","native","original"],def:"off",
+        hint:"native is a generated soundtrack, original keeps the reference video's sound"}],
+      ["resolution","select","Resolution",{opts:["720p","1080p","4k"],def:"720p"}],
+      ["aspect_ratio","select","Aspect ratio",{opts:["16:9","9:16","1:1"],def:"9:16",
+        hint:"required when there is no first frame and no reference video - otherwise those set the framing"}],
+      ["duration","select","Duration (s)",{opts:KL_DUR,def:"5"}],
+      ...KL_OPTS,
+    ]
+  },
+  ko1: {
+    title: "Kling O1 - omni video",
+    kling: "/omni-video/kling-o1", abbr: "ko1", shape: klingShape,
+    fields: [
+      ["prompt","textarea","Prompt",{def:"",rows:4,
+        hint:"max 2500 chars. @image_1 / @video_1 address the references below, @name an element. "
+           + "O1 has no multi-shot syntax"}],
+      ["first_frame","file","First frame",{hint:"optional - the frame the video opens on"}],
+      ["last_frame","file","Last frame",{
+        hint:"optional - needs a first frame. First plus last frame rules out reference images and elements"}],
+      ["refer_image","files","Reference images",{
+        hint:"@image_1, @image_2... - reference images plus elements: max 7, or max 4 with a reference video"}],
+      ["feature_video","file","Feature video",{
+        hint:"optional - motion/style reference. mp4/mov, max 200 MB, 3-10s, 700-2160px a side"}],
+      ["base_video","file","Base video",{hint:"optional - the clip to edit. Rules out first and last frame"}],
+      ["elements","json","Elements",{def:"",rows:3,
+        hint:KL_ELEM_HINT + ". O1 takes multi-image elements only - video-character elements are not supported yet"}],
+      ["audio","select","Audio",{opts:["off","original"],def:"off",
+        hint:"original keeps the reference video's sound. O1 generates no native soundtrack"}],
+      ["resolution","select","Resolution",{opts:["720p","1080p"],def:"720p"}],
+      ["aspect_ratio","select","Aspect ratio",{opts:["16:9","9:16","1:1"],def:"9:16",
+        hint:"required when there is no first frame and no reference video"}],
+      ["duration","select","Duration (s)",{opts:["3","4","5","6","7","8","9","10"],def:"5",
+        hint:"a bare first frame with no other reference can only be 5 or 10"}],
+      ...KL_OPTS,
+    ]
+  },
+  k26: {
+    title: "Kling 2.6 - image to video / motion control",
+    kling: s => isMC(s) ? "/motion-control/kling-2.6" : "/image-to-video/kling-2.6",
+    abbr: s => isMC(s) ? "k26mc" : "k26",
+    shape: klingShape,
+    fields: [
+      KL_MODE,
+      ["prompt","textarea","Prompt",{def:"",rows:4,
+        hint:"max 2500 chars - @name picks one of the voices defined below"}],
+      ["first_frame","file","First frame",{when:notMC,
+        hint:"required - jpg/png, max 50 MB, at least 300px a side, aspect 1:2.5 to 2.5:1"}],
+      ["last_frame","file","Last frame",{when:notMC,
+        hint:"optional - needs a first frame, and forces 1080p"}],
+      ["image","file","Appearance image",{when:isMC,
+        hint:"required - the character the output looks like. Head and upper body clear and unobstructed"}],
+      ["video","file","Motion video",{when:isMC,
+        hint:"required - mp4/mov, max 100 MB, one continuous take of a single person"}],
+      ["character_orientation","select","Character orientation",{opts:["video","image"],def:"video",when:isMC,
+        hint:"required - which input the facing follows. image caps the motion video at 10s, video allows 30s"}],
+      ["voices","json","Voices",{when:notMC,def:"",rows:3,
+        hint:'optional [{"voice_id":"...","id":"sweet"}] - max 2, from Kling’s voice API or their '
+           + 'presets. Needs audio set to native, and @sweet in the prompt picks it'}],
+      ["audio","select","Audio",{
+        optsBy: s => isMC(s) ? ["original","off"] : ["native","off"],
+        by: s => isMC(s) ? {def:"original"} : {def:"off"},
+        hint:"native is a generated soundtrack and forces 1080p; original keeps the motion video's sound"}],
+      ["resolution","select","Resolution",{opts:["720p","1080p"],def:"720p",
+        hint:"native audio and first-plus-last-frame both force 1080p"}],
+      ["duration","select","Duration (s)",{opts:["5","10"],def:"5",when:notMC,
+        hint:"motion control has no duration - the output follows the reference video"}],
+      ...KL_OPTS,
+    ]
+  },
+  k25t: {
+    title: "Kling 2.5 Turbo - image to video",
+    kling: "/image-to-video/kling-2.5-turbo", abbr: "k25t", shape: klingShape,
+    fields: [
+      ["prompt","textarea","Prompt",{def:"",rows:4,hint:"max 2500 chars"}],
+      ["first_frame","file","First frame",{
+        hint:"required - jpg/png, max 50 MB, at least 300px a side, aspect 1:2.5 to 2.5:1"}],
+      ["last_frame","file","Last frame",{
+        hint:"optional - needs a first frame, and forces 1080p"}],
+      ["resolution","select","Resolution",{opts:["720p","1080p"],def:"720p",
+        hint:"first-plus-last-frame runs at 1080p only"}],
+      ["duration","select","Duration (s)",{opts:["5","10"],def:"5"}],
+      ...KL_OPTS,
+    ]
+  },
+  k21m: {
+    // The one model of the six still on the old route: a flat body keyed by model_name,
+    // with no contents / settings envelope. What it takes was read off the live validator -
+    // it refuses image_tail, motion brush, camera control and 4k mode, and contrary to the
+    // docs' "kling-v2.x ignores cfg_scale" note it does range-check cfg_scale, so the box stays.
+    title: "Kling 2.1 Master - image to video (legacy route)",
+    kling: "/v1/videos/image2video", abbr: "k21m",
+    shape: b => {
+      b.model_name = "kling-v2-1-master";
+      b.watermark_info = { enabled: !!b.watermark };
+      delete b.watermark;
+    },
+    fields: [
+      ["image","file","Source image",{
+        hint:"required - the first frame. jpg/png, max 10 MB, at least 300px a side, aspect 1:2.5 to 2.5:1"}],
+      ["prompt","textarea","Prompt",{def:"",rows:4,hint:"max 2500 chars"}],
+      ["negative_prompt","text","Negative prompt",{def:"",hint:"optional, max 2500 chars"}],
+      ["cfg_scale","number","Prompt adherence",{def:0.5,min:0,max:1,step:0.05,
+        hint:"cfg_scale 0-1 - higher follows the prompt harder and leaves the model less room"}],
+      ["mode","select","Mode",{opts:["std","pro"],def:"pro",
+        hint:"std outputs 720p, pro outputs 1080p. This model has no 4k mode"}],
+      // A string enum on this route, not an integer - a number here comes back rejected.
+      ["duration","select","Duration (s)",{opts:["5","10"],def:"5",hint:"5 or 10 only on this model"}],
+      ["watermark","bool","Watermark",{def:false,hint:"asks for a watermarked copy alongside the clean one"}],
+      ["external_task_id","text","External task ID",{def:"",
+        hint:"optional - your own id for this job; must be unique across the account"}],
+    ]
+  },
+};
+
+// Seedream's own documented output sizes, read off the model docs on 20/08/2026 - the
+// generic ModelArk size list the other models take is not what this one accepts.
+// Three tiers per shape (~1 / 2.4 / 4.2 MP); the picker keeps the tier when the shape changes.
+const SD5_SIZES = {
+  "4:3":  ["1152x864", "1792x1344", "2368x1776"],
+  "3:4":  ["864x1152", "1344x1792", "1776x2368"],
+  "16:9": ["1424x800", "2048x1152", "2816x1584"],
+  "9:16": ["800x1424", "1152x2048", "1584x2816"],
+};
+
+const SERVICES = {
+  skin: {
+    title: "Realistic Skin Enhancement", base: `${API}/realistic-skin/v1`,
+    abbr: s => ({enhancorv1:"ev1", enhancorv3:"ev3", enhancorv4:"ev4", enhancorv4_base:"ev4b"}[s.model_version] || "skin"),
+    fields: [
+      ["img_url","file","Source image",{}],
+      ["model_version","select","Model version",{
+        opts:["enhancorv1","enhancorv3","enhancorv4","enhancorv4_base"], def:"enhancorv4", rerender:true,
+        hint:"v4 = Skin Editor 'Enhancor V4' (v4_fast). No enhancorv2 on the public API - see README"}],
+      ["enhancementMode","select","Enhancement mode",{
+        optsBy: s => SKIN_MODES[s.model_version], def:"standard",
+        when: s => SKIN_MODES[s.model_version].length > 1, rerender:true,
+        hint:"v1 only - v3/v4_base accept 'standard' alone, v4 ignores the field"}],
+      ["enhancementType","select","Enhancement type",{opts:["face","body"],def:"face"}],
+      ["skin_refinement_level","number","Skin refinement",{def:50,min:0,max:100}],
+      ["skin_realism_Level","number","Skin realism",{
+        when: s => !isV4(s) && s.model_version !== "enhancorv4_base",
+        by: s => isV3(s) ? {def:0.1,max:3,hint:"0-3 on v3"} : {def:1.7,max:5,hint:"0-5 on v1"},
+        step:0.1, min:0}],
+      ["portrait_depth","number","Portrait depth",{def:0.2,step:0.05,min:0.2,max:0.4,
+        when: s => isV3(s) || (s.model_version==="enhancorv1" && s.enhancementMode==="heavy"),
+        hint:"v3, or v1 in heavy mode"}],
+      ["output_resolution","number","Output resolution",{def:2048,min:1024,max:3072,when:isV3,hint:"v3 only"}],
+      ["mask_image_url","file","Mask image",{when:isV3,hint:"v3 only, optional"}],
+      ["mask_expand","number","Mask expand",{def:15,min:-20,max:20,when:isV3,hint:"v3 only"}],
+      // Undocumented v4 controls, recovered from their validator (see README).
+      ["enhancement_strength","select","Enhancement strength",{
+        opts:["subtle","realistic","pimple","freckle"], def:"realistic", when:isV4, rerender:true,
+        hint:"v4 only"}],
+      ["freckle_intensity","select","Freckle intensity",{
+        opts:[0,50,100], def:50, num:true,
+        when: s => isV4(s) && s.enhancement_strength==="freckle",
+        hint:"only when strength is 'freckle' - 0, 50 or 100 exactly"}],
+      ["fix_lighting_mode","bool","Fix lighting",{def:false,
+        when: s => isV4(s) && s.enhancement_strength==="realistic",
+        hint:"only when strength is 'realistic'"}],
+      ["fast_mode","bool","Fast mode",{def:false,when:isV4,hint:"v4 only"}],
+    ],
+    // Their own docs state v4 has no area control; the flags are ignored there.
+    areas: s => s.model_version==="enhancorv1" || isV3(s)
+  },
+  portrait: {
+    title: "Portrait Upscaler", base: `${API}/upscaler/v1`,
+    abbr: s => s.mode==="fast" ? "pupf" : "pup",
+    fields: [
+      ["img_url","file","Source image",{}],
+      ["mode","select","Mode",{opts:["fast","professional"],def:"professional"}],
+    ]
+  },
+  general: {
+    title: "General Image Upscaler", base: `${API}/image-upscaler/v1`,
+    abbr: "ups",
+    fields: [["img_url","file","Source image",{}]]
+  },
+  detailed: {
+    title: "Detailed (Upscale + Enhance)", base: `${API}/detailed/v1`,
+    abbr: "det",
+    fields: [["img_url","file","Source image",{}]]
+  },
+  // Stands in for the web app's "Seedream 5 Pro", which is NOT on this API - see README.
+  // Their app posts it to enhancor-server.vercel.app/api/kora/v1/generate behind a Firebase
+  // token with an encoded body. This is the nearest public equivalent: the same uncensored
+  // image-to-image editor, documented at 117.6 credits per output image.
+  imgeditor: {
+    title: "Image Editor (Full Access)", base: `${API}/enhancor-img-editor-full-access/v1`,
+    abbr: "imed",
+    fields: [
+      ["input_urls","files","Source images",{hint:"1-3 images, jpeg/png/webp, max 30 MB each"}],
+      ["prompt","textarea","Prompt",{def:"",rows:4,hint:"editing instruction, max 5000 chars"}],
+      ["n","number","Output images",{def:1,min:1,max:4,hint:"117.6 credits each"}],
+      // Optional server-side, and a wrong pick reshapes the source - so blank stays blank.
+      ["image_size","select","Image size",{
+        opts:["","square_hd","square","portrait_4_3","portrait_16_9","landscape_4_3","landscape_16_9"],
+        def:"", hint:"leave blank to let the API keep the source proportions"}],
+      ["negative_prompt","text","Negative prompt",{def:"",hint:"max 500 chars, optional"}],
+      ["enable_prompt_expansion","bool","Prompt expansion",{def:true,hint:"LLM prompt rewrite - their default is on"}],
+    ]
+  },
+
+  // --- fal.ai --------------------------------------------------------------
+  // `fal` instead of `base` switches the whole transport: queue.fal.run, Key auth,
+  // GET polling, and a provider-shaped result. Fields below are the complete input
+  // schema from fal's own OpenAPI document, not the marketing page.
+  // sync_mode is deliberately omitted on the two image editors below: it returns a data
+  // URI and keeps the job out of request history, which breaks the save-to-disk flow.
+  // (The video endpoints have no sync_mode in their schema at all.)
+  seedream5edit: {
+    title: "Seedream 5 Pro Edit (fal.ai)", fal: "bytedance/seedream/v5/pro/edit",
+    abbr: "sd5e",
+    results: j => (j.images || []).map(i => i.url).filter(Boolean),
+    // image_size is a union: an enum string, or {width,height}. The chips carry "WxH",
+    // which is the "custom" arm of that union, so every send takes the object form.
+    shape: b => {
+      const [w,h] = String(b.image_size||"").split("x").map(Number);
+      if (w && h) b.image_size = { width: w, height: h };
+    },
+    fields: [
+      ["image_urls","files","Reference images",{hint:"required - up to 10; past 10 only the last 10 are used"}],
+      ["prompt","textarea","Prompt",{def:"",rows:4,hint:"required - the edit instruction"}],
+      // Sent as the union's {width,height} arm - see shape() above. fal documents the
+      // total-pixel range as 1024x1024 to 2048x2048, so the 4.2 MP tier is over their
+      // ceiling and can come back rejected; it is kept because the model accepts it.
+      ["image_size","sizepick","Aspect ratio / resolution",{def:"1152x2048", opts:SD5_SIZES,
+        hint:"pick the shape, then the pixels - 4.2 MP is above fal's documented ceiling"}],
+      ["num_images","number","Number of images",{def:1,min:1,max:6,hint:"separate generations from the one prompt"}],
+      ["output_format","select","Output format",{opts:["png","jpeg"],def:"png"}],
+      ["enable_safety_checker","bool","Safety checker",{def:true,
+        hint:"turning it off needs account authorisation - unauthorised requests are checked anyway"}],
+    ]
+  },
+  briaexpand: {
+    title: "Bria Expand (fal.ai)", fal: "fal-ai/bria/expand",
+    abbr: "brex",
+    results: j => j.image && j.image.url ? [j.image.url] : [],
+    // Bria takes three [x,y] pairs; the form asks for the six numbers separately so each
+    // one gets its own label and range. A pair is only sent when both halves are filled.
+    shape: b => {
+      // Each pair is all-or-nothing: half a pair would serialise as [1200,null] and fal
+      // rejects that with a shape error instead of the plain "field required" it should give.
+      if (b.canvas_w !== undefined && b.canvas_h !== undefined) b.canvas_size = [b.canvas_w, b.canvas_h];
+      if (b.orig_w !== undefined && b.orig_h !== undefined) b.original_image_size = [b.orig_w, b.orig_h];
+      if (b.orig_x !== undefined && b.orig_y !== undefined) b.original_image_location = [b.orig_x, b.orig_y];
+      ["canvas_w","canvas_h","orig_w","orig_h","orig_x","orig_y"].forEach(k => delete b[k]);
+    },
+    fields: [
+      ["image_url","file","Source image",{hint:"required"}],
+      ["canvas_w","number","Canvas width",{def:1000,min:1,max:5000,hint:"required - canvas area must stay under 5000x5000"}],
+      ["canvas_h","number","Canvas height",{def:1000,min:1,max:5000,hint:"required"}],
+      ["aspect_ratio","select","Aspect ratio",{
+        opts:["","1:1","2:3","3:2","3:4","4:3","4:5","5:4","9:16","16:9"], def:"",
+        hint:"optional - when set it overrides the placement fields below"}],
+      ["orig_w","number","Original width",{def:"",min:1,max:5000,
+        hint:"optional - size of the source inside the canvas. Keep the subject above 15% of canvas area"}],
+      ["orig_h","number","Original height",{def:"",min:1,max:5000,hint:"optional - pairs with original width"}],
+      ["orig_x","number","Original X",{def:"",hint:"optional - upper-left corner of the source; may sit outside the canvas"}],
+      ["orig_y","number","Original Y",{def:"",hint:"optional - pairs with original X"}],
+      ["prompt","textarea","Prompt",{def:"",rows:3,hint:"optional - English only, no special characters"}],
+      ["negative_prompt","text","Negative prompt",{def:"",hint:"optional"}],
+      ["seed","number","Seed",{def:"",min:0,max:2147483647,hint:"optional - blank is random; reuse a seed to reproduce a result"}],
+    ]
+  },
+  // Both video endpoints below return {video:{url}}, and duration is a *string* enum in
+  // fal's schema, not an integer - a number field would 422. Endpoint ids and enums read
+  // off fal's OpenAPI document on 16/08/2026.
+  seedance15fal: {
+    title: "Seedance 1.5 Pro i2v (fal.ai)", fal: "fal-ai/bytedance/seedance/v1.5/pro/image-to-video",
+    abbr: "sd15",
+    results: j => j.video && j.video.url ? [j.video.url] : [],
+    fields: [
+      ["image_url","file","Source image",{hint:"required - the first frame"}],
+      ["prompt","textarea","Prompt",{def:"",rows:4,hint:"required"}],
+      ["end_image_url","file","End image",{hint:"optional - the frame the video ends on"}],
+      ["duration","select","Duration (s)",{opts:["4","5","6","7","8","9","10","11","12"],def:"5"}],
+      ["resolution","select","Resolution",{opts:["480p","720p","1080p"],def:"720p",
+        hint:"480p is fastest, 1080p is highest quality"}],
+      // Defaults deliberately match the ModelArk tab rather than fal's own (16:9, audio on,
+      // camera free), so the two tabs are a like-for-like run out of the box.
+      ["aspect_ratio","select","Aspect ratio",{opts:["21:9","16:9","4:3","1:1","3:4","9:16","auto"],def:"9:16",
+        hint:"auto follows the source image"}],
+      ["generate_audio","bool","Generate audio",{def:false}],
+      ["camera_fixed","bool","Fix camera",{def:true,hint:"locks the camera position"}],
+      ["seed","number","Seed",{def:"",min:-1,max:2147483647,hint:"optional - blank is random, -1 also means random"}],
+      ["enable_safety_checker","bool","Safety checker",{def:true,
+        hint:"turning it off needs account authorisation - unauthorised requests are checked anyway"}],
+    ]
+  },
+  kling26fal: {
+    // No aspect_ratio and no seed on this endpoint - the start image sets the framing.
+    title: "Kling 2.6 Pro i2v (fal.ai)", fal: "fal-ai/kling-video/v2.6/pro/image-to-video",
+    abbr: "kv26",
+    results: j => j.video && j.video.url ? [j.video.url] : [],
+    fields: [
+      ["start_image_url","file","Start image",{
+        hint:"required - max 10 MB, min 300x300, aspect ratio 0.40-2.50"}],
+      ["prompt","textarea","Prompt",{def:"",rows:4,
+        hint:"required - <<<voice_1>>> / <<<voice_2>>> reference the voice IDs below"}],
+      ["end_image_url","file","End image",{hint:"optional - same limits as the start image"}],
+      ["duration","select","Duration (s)",{opts:["5","10"],def:"5"}],
+      ["negative_prompt","text","Negative prompt",{def:"blur, distort, and low quality"}],
+      ["generate_audio","bool","Generate audio",{def:true,
+        hint:"native Chinese/English speech - other languages are translated to English"}],
+      ["voice_ids","json","Voice IDs",{def:"",rows:2,
+        hint:'optional ["voice_id_1","voice_id_2"] - max 2, from fal-ai/kling-video/create-voice'}],
+    ]
+  },
+  // Now documented: /api/enhancor-video-pro/v1 (the old /api/seedance-2/v1 path still
+  // answers - same validator, same errors). model_version is gone from the schema and
+  // still unvalidated if sent, so the tab no longer offers it (see README).
+  seedance: {
+    title: "Seedance 2.0 Unrestricted (video)", base: `${API}/enhancor-video-pro/v1`,
+    abbr: "sd2",
+    fields: [
+      ["type","select","Type",{opts:["image-to-video","text-to-video"],def:"image-to-video",rerender:true}],
+      ["mode","select","Mode",{
+        opts:["first_n_last_frames","multi_reference","extend","multi_frame","lipsyncing","voice_clone","ugc"],
+        def:"first_n_last_frames", when:isI2V, rerender:true, hint:"image-to-video only"}],
+      ["prompt","textarea","Prompt",{def:"",rows:4, when: s => !vmode(s,"multi_frame"),
+        hint:"@image1 / @video1 / @audio1 reference the uploads below; @omni-character:char_... a saved character"}],
+      ["multi_frame_prompts","json","Multi-frame prompts",{
+        when: s => vmode(s,"multi_frame"), rows:6,
+        def:'[\n  {"prompt": "Wide establishing shot", "duration": 5},\n  {"prompt": "Camera pushes in", "duration": 5}\n]',
+        hint:"replaces prompt and duration - segment durations must sum to 4-15s"}],
+      ["first_frame_image","file","First frame",{when: s => vmode(s,"first_n_last_frames")}],
+      ["last_frame_image","file","Last frame",{when: s => vmode(s,"first_n_last_frames"),
+        hint:"optional - set to the same image to return to the opening pose"}],
+      ["lipsyncing_audio","file","Lip-sync audio",{
+        when: s => isI2V(s) && ["lipsyncing","voice_clone"].includes(s.mode),
+        hint:"mp3/wav - required for lipsyncing and voice_clone"}],
+      ["products","files","Product images",{when: s => vmode(s,"ugc"), hint:"@product_image1... - ugc only"}],
+      ["influencers","files","Influencer images",{when: s => vmode(s,"ugc"),
+        hint:"@influencer_image1... - products + influencers max 9 images"}],
+      ["images","files","Reference images",{when: s => isI2V(s) && s.mode!=="ugc", hint:"max 9 - @image1, @image2..."}],
+      ["videos","files","Reference videos",{when:isI2V, hint:"max 3, under 15s combined - @video1..."}],
+      ["audios","files","Reference audio",{when:isI2V, hint:"max 3, under 15s combined - @audio1..."}],
+      ["duration","number","Duration (s)",{def:12,min:4,max:15, when: s => !vmode(s,"multi_frame")}],
+      ["resolution","select","Resolution",{opts:["480p","720p","1080p","4k"],def:"720p",hint:"1080p and 4k need fast mode off"}],
+      ["aspect_ratio","select","Aspect ratio",{opts:["9:16","16:9","4:3","3:4","1:1","21:9"],def:"9:16"}],
+      ["fast_mode","bool","Fast mode",{def:false,hint:"must be off for 1080p / 4k"}],
+      ["full_access","bool","Full access",{def:false,hint:"on when the generation involves human faces"}],
+      ["is_uncensored","bool","Uncensored",{def:false,hint:"on when the generation is NSFW"}],
+    ]
+  },
+  // Enumerations below were read off the live validators on 13/08/2026, not the doc page -
+  // their published schema and the validator disagree in places (see README).
+  seedance25: {
+    title: "Seedance 2.5 Unrestricted (video)", base: `${API}/seedance2.5/v1`,
+    abbr: "sd25",
+    fields: [
+      ["mode","select","Mode",{
+        opts:["text_to_video","first_n_last_frames","multi_reference","edit","extend","multi_frame","lipsyncing","voice_clone","ugc"],
+        def:"text_to_video", rerender:true,
+        hint:"there is no `type` field on this endpoint - mode alone picks the workflow"}],
+      ["prompt","textarea","Prompt",{def:"",rows:4, when: s => s.mode!=="multi_frame",
+        hint:"@image1 / @video1 / @audio1 reference the uploads below"}],
+      ["multi_frame_prompts","json","Multi-frame prompts",{
+        when: s => s.mode==="multi_frame", rows:6,
+        def:'[\n  {"prompt": "Wide establishing shot", "duration": 5},\n  {"prompt": "Camera pushes in", "duration": 5}\n]',
+        hint:"replaces prompt and duration - segment durations must sum to 4-30s"}],
+      ["first_frame_image","file","First frame",{when: s => s.mode==="first_n_last_frames"}],
+      ["last_frame_image","file","Last frame",{when: s => s.mode==="first_n_last_frames", hint:"optional"}],
+      ["images","files","Reference images",{
+        when: s => smode(s,"multi_reference","edit","extend","multi_frame","lipsyncing","voice_clone"),
+        hint:"max 30 - required for lipsyncing / voice_clone, at least one reference for multi_reference"}],
+      ["videos","files","Reference videos",{
+        when: s => smode(s,"multi_reference","edit","extend","multi_frame"),
+        hint:"max 10, under 30s combined - required for edit / extend"}],
+      ["audios","files","Reference audio",{
+        when: s => smode(s,"multi_reference","edit","extend","multi_frame"),
+        hint:"max 10, under 30s combined"}],
+      ["lipsyncing_audio","file","Lip-sync audio",{
+        when: s => smode(s,"lipsyncing","voice_clone"), hint:"mp3/wav/m4a, 30s max"}],
+      ["products","files","Product images",{when: s => s.mode==="ugc"}],
+      ["influencers","files","Influencer images",{when: s => s.mode==="ugc",
+        hint:"products + influencers max 30"}],
+      // edit is fixed at -1 (output matches the input clip). Pinning max to -1 makes the
+      // renderer's clamp rewrite a carried-over 12 rather than sending a payload that 400s.
+      ["duration","number","Duration (s)",{when: s => s.mode!=="multi_frame",
+        by: s => s.mode==="edit"
+          ? {def:-1, min:-1, max:-1, hint:"edit is fixed at -1 - the output matches the input clip"}
+          : {def:12, min:-1, max:30, hint:"4-30, or -1 for auto"}}],
+      ["resolution","select","Resolution",{opts:["480p","720p"],def:"720p"}],
+      // The narrowed list needs a matching default, or the carried-over 9:16 is neither
+      // selectable nor replaced and the select renders blank.
+      ["aspect_ratio","select","Aspect ratio",{def:"9:16",
+        optsBy: s => smode(s,"edit","extend","first_n_last_frames")
+          ? ["adaptive"] : ["21:9","16:9","4:3","1:1","3:4","9:16","adaptive"],
+        by: s => smode(s,"edit","extend","first_n_last_frames") ? {def:"adaptive"} : {},
+        hint:"forced to adaptive on edit / extend / first_n_last_frames"}],
+      ["output_format","select","Output format",{opts:["mp4","mov"],def:"mp4",
+        hint:"their default is mov on edit / extend - unvalidated, so this is a request"}],
+      ["pass_faces","bool","Human faces",{def:false,hint:"on when the generation involves human faces"}],
+      ["full_access","bool","Full access",{def:false,hint:"on when the generation is NSFW"}],
+    ]
+  },
+  minimax: {
+    title: "MiniMax H3 (video)", base: `${API}/minimax-h3/v1`,
+    abbr: "mmh3",
+    fields: [
+      ["type","select","Type",{opts:["image-to-video","text-to-video"],def:"image-to-video",rerender:true}],
+      ["mode","select","Mode",{opts:["multi_reference","first_n_last_frames"],
+        def:"multi_reference", when:isI2V, rerender:true, hint:"image-to-video only"}],
+      ["prompt","textarea","Prompt",{def:"",rows:4,
+        hint:"@image1 / @video1 / @audio1 reference the uploads below"}],
+      ["first_frame_image","file","First frame",{when: s => vmode(s,"first_n_last_frames")}],
+      ["last_frame_image","file","Last frame",{when: s => vmode(s,"first_n_last_frames"),hint:"optional"}],
+      ["images","files","Reference images",{when: s => vmode(s,"multi_reference"),
+        hint:"max 9 - @image1, @image2..."}],
+      ["videos","files","Reference videos",{when: s => vmode(s,"multi_reference"),
+        hint:"max 3, under 15s combined - @video1..."}],
+      ["audios","files","Reference audio",{when: s => vmode(s,"multi_reference"),
+        hint:"max 3, under 15s combined - @audio1..."}],
+      ["duration","number","Duration (s)",{def:12,min:4,max:15}],
+      ["resolution","select","Resolution",{opts:["768p","2k"],def:"768p",hint:"768p or 2k - no 480p/1080p here"}],
+      ["aspect_ratio","select","Aspect ratio",{opts:["21:9","16:9","4:3","1:1","3:4","9:16"],def:"9:16"}],
+    ]
+  },
+  seedmini: {
+    title: "Seed Mini (video)", base: `${API}/seed-mini/v1`,
+    abbr: "smin",
+    fields: [
+      ["type","select","Type",{opts:["image-to-video","text-to-video"],def:"image-to-video",rerender:true,
+        hint:"no mode field on this endpoint - text-to-video rejects every media field"}],
+      ["prompt","textarea","Prompt",{def:"",rows:4,
+        hint:"@image1 / @video1 / @audio1 reference the uploads below"}],
+      // Frames and reference lists are mutually exclusive here and the API rejects a mix,
+      // so both groups are shown and whichever is left empty is not sent.
+      ["first_frame_image","file","First frame",{when:isI2V,
+        hint:"frame fields and the reference lists are mutually exclusive - fill one group only"}],
+      ["last_frame_image","file","Last frame",{when:isI2V,hint:"optional, needs a first frame"}],
+      ["images","files","Reference images",{when:isI2V,
+        hint:"max 9, png/jpeg - leave the frame fields empty to use these"}],
+      ["videos","files","Reference videos",{when:isI2V,hint:"max 3, under 15s combined"}],
+      ["audios","files","Reference audio",{when:isI2V,hint:"max 3, under 15s combined"}],
+      ["duration","number","Duration (s)",{def:12,min:4,max:15}],
+      ["resolution","select","Resolution",{opts:["480p","720p"],def:"720p"}],
+      ["aspect_ratio","select","Aspect ratio",{opts:["21:9","16:9","4:3","1:1","3:4","9:16"],def:"9:16"}],
+      ["generate_audio","bool","Generate audio",{def:true}],
+      ["full_access","bool","Full access",{def:false,hint:"on when the generation involves human faces"}],
+      ["is_uncensored","bool","Uncensored",{def:false,hint:"on when the generation is NSFW"}],
+    ]
+  },
+  klingv3: {
+    title: "Kling 3.0 (video)", base: `${API}/kling-v3/v1`,
+    abbr: s => s.mode==="standard" ? "kv3s" : "kv3",
+    fields: [
+      ["mode","select","Mode",{opts:["pro","standard"],def:"pro",hint:"pro is Kling 3.0 Pro"}],
+      ["multi_shots","bool","Multi-shot",{def:false,rerender:true,
+        hint:"swaps prompt + duration for a shot list of up to 5 scenes"}],
+      ["prompt","textarea","Prompt",{def:"",rows:4, when: s => !s.multi_shots,
+        hint:"max 2500 chars - @element_name references a Kling element defined below"}],
+      ["multi_prompt","json","Shot list",{when: s => !!s.multi_shots, rows:6,
+        def:'[\n  {"prompt": "A woman walks into a misty forest at dawn", "duration": 5},\n  {"prompt": "Golden light breaks through the canopy", "duration": 4}\n]',
+        hint:"2500 chars total, each duration 1-12s, summing to 3-15s"}],
+      ["image_input","files","Frame images",{
+        hint:"single shot: start then end frame. multi-shot: start frame only. png/jpg"}],
+      ["duration","number","Duration (s)",{def:8,min:3,max:15, when: s => !s.multi_shots}],
+      ["sound","bool","Sound",{def:true,hint:"generates audio alongside the video"}],
+      ["aspect_ratio","select","Aspect ratio",{opts:["16:9","9:16","1:1"],def:"9:16",
+        hint:"ignored when a first-frame image is supplied - the image wins"}],
+      ["kling_elements","json","Kling elements",{def:"",rows:6,
+        hint:'optional [{"name":"element_dog","description":"...","element_input_urls":[...]}] - name must start with element_, 2-50 images each'}],
+    ]
+  },
+  kora: {
+    title: "Kora Pro Generation", base: `${API}/kora/v1`,
+    abbr: s => s.model==="kora_pro_cinema" ? "kpc" : "kp",
+    fields: [
+      ["model","select","Model",{opts:["kora_pro","kora_pro_cinema"],def:"kora_pro"}],
+      ["prompt","textarea","Prompt",{def:"",rows:4}],
+      ["img_url","file","Reference image",{hint:"optional, image-to-image"}],
+      ["generation_mode","select","Generation mode",{opts:["normal","2k_pro","4k_ultra"],def:"normal"}],
+      // Free text - their validator accepts anything here, so this is a default, not a guarantee.
+      ["image_size","text","Image size",{def:"portrait_9:16",hint:"or custom_W_H - not validated"}],
+    ]
+  },
+
+  // --- BytePlus ModelArk (ap-southeast-1) ----------------------------------
+  // `ark`/`arkImage` instead of `base` or `fal` switches the transport again:
+  // ark.ap-southeast.bytepluses.com, Bearer auth, and the model id in the body
+  // rather than in the path - one endpoint serves every model on the platform.
+  //   video: POST /contents/generations/tasks -> {id}, then GET .../tasks/{id}
+  //   image: POST /images/generations         -> {data:[{url}]}, synchronous
+  // Model ids carry their release date and are what the API actually keys on; the
+  // titles below show them so a rejected id is visible without opening the console.
+  sd5pro: {
+    title: "Dola-Seedream-5.0-pro - dola-seedream-5-0-pro-260628",
+    arkImage: `${ARK}/images/generations`, model: "dola-seedream-5-0-pro-260628",
+    abbr: "sd5p",
+    // No watermark control on the form: the platform default is on, so it is pinned off here.
+    shape: b => { b.watermark = false; },
+    results: j => (j.data || []).map(d => d.url).filter(Boolean),
+    fields: [
+      ["prompt","textarea","Prompt",{def:"",rows:4,hint:"required"}],
+      ["image","files","Reference images",{
+        hint:"optional - up to 10. Any image here switches the model from text-to-image into edit / compose"}],
+      // response_format is left at its "url" default on purpose: b64_json returns the
+      // bytes inline, which breaks the save-to-disk flow the same way fal's sync_mode does.
+      // The pixel ceiling is the validator's own number, read off its rejection of an
+      // oversized request on 20/08/2026: "image area must be at most 4624220 pixels".
+      ["size","sizepick","Aspect ratio / resolution",{def:"1152x2048", opts:SD5_SIZES,
+        hint:"pick the shape, then the pixels - the ratio is carried by the value itself"}],
+      ["output_format","select","Output format",{opts:["png","jpeg"],def:"png"}],
+      ["seed","number","Seed",{def:"",min:-1,max:2147483647,hint:"optional - blank is random, -1 also means random"}],
+    ]
+  },
+  ...arkVideos,
+  ...klingVideos
+};
+
+/* ---------- publisher pages ---------- */
+// A provider gets one nav entry and one page; the drop-down on that page picks the model.
+// Nothing about the form changes - FORMS/OUTS/STATUS are keyed by service id already, so
+// every model keeps its own inputs, its own results panel and its own live status line
+// whether you leave it by switching models or by leaving the page entirely.
+// Order is newest first: models[0] is what a page with no remembered pick opens on.
+const PUBLISHERS = {
+  pubKling: {
+    brand:"kling", name:"KLING", tail:"AI",
+    sub:"image to video &middot; api-singapore.klingai.com",
+    models:[["k30","Kling 3.0"], ["k30omni","Kling 3.0 Omni"], ["ko1","Kling O1"],
+            ["k26","Kling 2.6"], ["k25t","Kling 2.5 Turbo"], ["k21m","Kling 2.1 Master"]] },
+  pubSeedance: {
+    brand:"byteplus", name:"BYTEPLUS", tail:"SEEDANCE",
+    sub:"ModelArk &middot; ap-southeast-1",
+    models:[["bpsd25","Dreamina-Seedance-2.5"], ["bpsd20","Dreamina-Seedance-2.0"],
+            ["bpsd20fast","Dreamina-Seedance-2.0-fast"], ["bpsd20mini","Dreamina-Seedance-2.0-mini"],
+            ["bpsd15pro","ByteDance-Seedance-1.5-pro"]] },
+  pubFal: {
+    brand:"fal", name:"fal", tail:".ai",
+    sub:"queue.fal.run",
+    models:[["seedance15fal","Seedance 1.5 Pro i2v"], ["kling26fal","Kling 2.6 Pro i2v"]] },
+};
+
+/* ---------- guarded-switch nav ---------- */
+const ALL_GROUPS = [
+  { label:"IMAGE EDITORS", code:"CH-01", tag:"INDEX / 01", items:[
+      ["sd5pro","Dola-Seedream-5.0-pro"],
+      ["seedream5edit","Seedream 5 Pro Edit"], ["briaexpand","Bria Expand"],
+      ["imgeditor","Image Editor F/A"], ["kora","Kora"], ["general","Upscale"], ["detailed","Detailed"] ] },
+  { label:"PORTRAIT ENHANCORS", code:"CH-02", tag:"INDEX / 02", items:[
+      ["skin","Skin"], ["portrait","Portrait"] ] },
+  // One entry per provider, not per model: the models live behind the drop-down on the
+  // provider's own page. Only the Enhancor tabs (hidden while ENHANCOR_ON is off) are
+  // still listed model by model, because they are not one publisher's line-up.
+  { label:"VIDEO GENERATORS", code:"CH-03", tag:"INDEX / 03", items:[
+      ["pubKling","Kling AI"], ["pubSeedance","BytePlus Seedance"], ["pubFal","fal.ai"],
+      ["seedance","Seedance 2"], ["seedance25","Seedance 2.5"], ["minimax","MiniMax H3"],
+      ["seedmini","Seed Mini"], ["klingv3","Kling 3 (Enhancor)"] ] },
+  // no items = no panel, the switch just latches and renders
+  { label:"GALLERY", code:"CH-04", tag:"", items:[] }
+];
+
+// One test, one place: a service that still carries `base` posts to Enhancor. While
+// ENHANCOR_ON is off those entries never reach the nav, so PORTRAIT ENHANCORS - which is
+// nothing but Enhancor tabs - goes with them, while the mixed groups keep their fal.ai
+// and BytePlus tabs.
+const GROUPS = ALL_GROUPS.filter(g => {
+  const kept = g.items.filter(([id]) => ENHANCOR_ON || !(SERVICES[id] && SERVICES[id].base));
+  if (g.items.length && !kept.length) return false;   // an all-Enhancor group, e.g. CH-02
+  g.items = kept;
+  return true;
+});
+
+const SWITCH = `<span class="sw">
+  <span class="sw-glow"></span>
+  <span class="sw-body">
+    <span class="sw-in"></span><span class="sw-lit"></span><span class="sw-well"></span>
+    <span class="sw-slot"></span>
+    <span class="sw-pivot"><span class="sw-lever"><i></i></span></span>
+    <span class="sw-base"></span><span class="sw-haz"></span>
+  </span>
+  <span class="sw-cover">
+    <span class="sw-front">
+      <span class="sw-face"></span><i class="l1"></i><i class="l2"></i><i class="st"></i><i class="dt"></i>
+    </span>
+    <span class="sw-rear"></span>
+  </span>
+</span>`;
+
+const navEl = document.getElementById("nav"), pane = document.getElementById("pane");
+// Where the current form draws. The plain tabs draw straight into the pane; a publisher
+// page keeps its brand plate at the top and hands the form the box underneath.
+let FORM_HOST = pane;
+let openGroup = null;
+
+GROUPS.forEach((g, gi)=>{
+  const item = document.createElement("div");
+  item.className = "nav-item";
+  g.btn = document.createElement("button");
+  g.btn.className = "nb"; g.btn.type = "button";
+  g.btn.innerHTML = SWITCH +
+    `<span class="nb-txt"><span class="nb-lbl">${g.label}</span><span class="nb-code">${g.code}</span></span>`;
+  item.appendChild(g.btn);
+
+  if (g.items.length){
+    g.panel = document.createElement("div");
+    g.panel.className = "panel";
+    g.panel.innerHTML =
+      `<div class="panel-h"><span>${g.tag}</span><b>UNLOCKED</b></div>` +
+      g.items.map(([id,label],j)=>
+        `<div class="prow" style="--i:${j}"><a href="#" data-id="${id}">` +
+        `<span class="n">${String(j+1).padStart(2,"0")}</span><span>${label}</span></a></div>`).join("") +
+      `<div class="panel-f"><span>${String(g.items.length).padStart(2,"0")} ENTRIES</span><span>&#9670;</span></div>`;
+    g.panel.onclick = e=>{
+      const a = e.target.closest("a[data-id]");
+      if (!a) return;
+      e.preventDefault();
+      setOpen(null);
+      render(a.dataset.id);
+    };
+    item.appendChild(g.panel);
+    g.btn.onclick = ()=> setOpen(openGroup === gi ? null : gi);
+  } else {
+    g.btn.onclick = ()=>{ setOpen(null); render("gallery"); };
+  }
+  navEl.appendChild(item);
+});
+
+function setOpen(gi){
+  openGroup = gi;
+  GROUPS.forEach((g,i)=>{
+    g.btn.classList.toggle("open", i === gi);
+    if (g.panel) g.panel.classList.toggle("open", i === gi);
+  });
+}
+document.addEventListener("mousedown", e=>{ if (!e.target.closest("nav")) setOpen(null); });
+document.addEventListener("keydown", e=>{ if (e.key === "Escape") setOpen(null); });
+
+function renderPublisher(pid){
+  const p = PUBLISHERS[pid];
+  const plate = document.createElement("div");
+  plate.className = "pub pub-" + p.brand;
+  plate.innerHTML = `<div class="pub-mark">${p.name}<span>${p.tail}</span></div>
+                     <div class="pub-sub">${p.sub}</div>`;
+  const pick = document.createElement("div"); pick.className = "pub-pick";
+  const lab = document.createElement("label"); lab.textContent = "Model";
+  const sel = document.createElement("select");
+  sel.innerHTML = p.models.map(([id,label])=> `<option value="${id}">${esc(label)}</option>`).join("");
+  // Last model used on this page, or their newest. A remembered id that no longer exists
+  // (a model dropped from the list) falls back rather than rendering an empty page.
+  const saved = localStorage.getItem("pubModel:" + pid);
+  sel.value = p.models.some(([id])=> id === saved) ? saved : p.models[0][0];
+  pick.append(lab, sel);
+  plate.appendChild(pick);
+  pane.appendChild(plate);
+
+  const host = document.createElement("div");
+  pane.appendChild(host);
+  const show = ()=>{
+    localStorage.setItem("pubModel:" + pid, sel.value);
+    FORM_HOST = host;
+    renderService(sel.value);
+  };
+  sel.onchange = show;
+  show();
+}
+
+function render(id){
+  // the switch owning the current tab stays armed, so the nav shows what is loaded
+  GROUPS.forEach(g=> g.btn.classList.toggle("armed",
+    g.items.length ? g.items.some(([n])=> n === id) : id === "gallery"));
+  navEl.querySelectorAll(".prow a").forEach(a=> a.classList.toggle("on", a.dataset.id === id));
+  pgShow(id);
+  pane.innerHTML = "";
+  pane.scrollTop = 0;   // a page arrived at from another one has to start at its own top
+  FORM_HOST = pane;
+  if (PUBLISHERS[id]) renderPublisher(id);
+  else if (SERVICES[id]) renderService(id);
+  else if (id==="gallery") renderGallery();
+}
+
+/* ---------- drop zone ---------- */
+function dropZone(onFile, label){
+  const z = document.createElement("div");
+  z.className = "drop";
+  z.innerHTML = `<b>Drop file here</b> &nbsp;/&nbsp; click to browse<br>${label||""}`;
+  const inp = document.createElement("input");
+  inp.type = "file"; inp.className = "hide";
+  z.appendChild(inp);
+  z.onclick = ()=> inp.click();
+  inp.onchange = ()=> inp.files[0] && onFile(inp.files[0]);
+  ["dragenter","dragover"].forEach(e=> z.addEventListener(e, ev=>{ ev.preventDefault(); z.classList.add("hot"); }));
+  ["dragleave","drop"].forEach(e=> z.addEventListener(e, ev=>{ ev.preventDefault(); z.classList.remove("hot"); }));
+  z.addEventListener("drop", ev=>{ const f = ev.dataTransfer.files[0]; if (f) onFile(f); });
+  return z;
+}
+
+/* ---------- prompt library ---------- */
+// Stored per service id in localStorage, and hung off the field spec rather than any one
+// model: every model that declares a plain `prompt` textarea - including ones added later -
+// gets the store, the picker and the counter with no extra wiring. A new model only needs
+// its ["prompt","textarea",...] field, as it already does.
+const PSEL = {};                                  // svcId -> selected prompt id, survives re-renders
+const pKey = id => "prompts:" + id;
+function pList(id){                               // newest first
+  try { return (JSON.parse(localStorage.getItem(pKey(id))) || []).sort((a,b)=> b.id - a.id); }
+  catch(e){ return []; }
+}
+function pWrite(id, list){ localStorage.setItem(pKey(id), JSON.stringify(list)); }
+// The id is what edit and delete match on, and Date.now() repeats when two prompts are
+// saved inside the same millisecond - so bump past anything already taken.
+function pAdd(id, title, body){
+  const list = pList(id);
+  let pid = Date.now();
+  while (list.some(p => p.id === pid)) pid++;
+  list.unshift({ id: pid, title, body });
+  pWrite(id, list);
+  return pid;
+}
+function pSet(id, pid, title, body){
+  pWrite(id, pList(id).map(p => p.id === pid ? { id: p.id, title, body } : p));
+}
+function pDel(id, pid){ pWrite(id, pList(id).filter(p => p.id !== pid)); }
+
+// `apply` writes the loaded text back into form state and refreshes the counter.
+// `fresh` is true only on a first open of the tab, which is when the top (most recent)
+// prompt is selected and loaded; a re-render keeps whatever was selected.
+function promptBar(svcId, ta, apply, fresh){
+  const bar = document.createElement("div");
+  bar.className = "pbar";
+  const sel = document.createElement("select");
+  bar.appendChild(sel);
+  const btn = (cls, text, fn)=>{
+    const b = document.createElement("button");
+    b.type = "button"; b.className = cls; b.textContent = text; b.onclick = fn;
+    bar.appendChild(b); return b;
+  };
+  const current = ()=> pList(svcId).find(p => p.id === Number(sel.value));
+
+  const fill = ()=>{
+    const list = pList(svcId);
+    sel.innerHTML = list.length
+      ? list.map(p=> `<option value="${p.id}">${esc(p.title)}</option>`).join("")
+      : `<option value="">- no saved prompts -</option>`;
+    if (list.length){
+      if (!list.some(p => p.id === PSEL[svcId])) PSEL[svcId] = list[0].id;
+      sel.value = PSEL[svcId];
+    } else delete PSEL[svcId];
+    [edit, load, del].forEach(b => b.disabled = !list.length);
+  };
+  sel.onchange = ()=> PSEL[svcId] = Number(sel.value);
+
+  const add = btn("p-new", "New", ()=>{
+    const title = (window.prompt("Title for this prompt") || "").trim();
+    if (!title) return;
+    PSEL[svcId] = pAdd(svcId, title, ta.value);
+    fill();
+    local("sys", `prompt "${title}" saved for ${svcId}`);
+  });
+  const edit = btn("p-edit", "Edit", ()=>{
+    const p = current(); if (!p) return;
+    const title = (window.prompt("Title for this prompt", p.title) || "").trim();
+    if (!title) return;
+    pSet(svcId, p.id, title, ta.value);      // body comes from the box, so Edit also saves changes
+    fill();
+    local("sys", `prompt "${title}" updated for ${svcId}`);
+  });
+  const load = btn("p-load", "Load", ()=>{
+    const p = current(); if (!p) return;
+    ta.value = p.body; apply(p.body);
+  });
+  const del = btn("p-del", "Delete", ()=>{
+    const p = current(); if (!p) return;
+    if (!confirm(`Delete prompt "${p.title}"?`)) return;
+    pDel(svcId, p.id); delete PSEL[svcId]; fill();
+    local("sys", `prompt "${p.title}" deleted from ${svcId}`);
+  });
+
+  fill();
+  if (fresh){
+    const list = pList(svcId);
+    if (list.length){ PSEL[svcId] = list[0].id; sel.value = list[0].id;
+                      ta.value = list[0].body; apply(list[0].body); }
+  }
+  return bar;
+}
+
+/* ---------- service form ---------- */
+// Number("") is 0, and on an optional field (bria's seed, its placement pairs) 0 is a
+// real value that means something else - so a blank stays blank the whole way through,
+// and the send loop drops it. Every default-seeding path has to agree on this.
+const numOrBlank = (type, v) => type === "number" && v !== "" ? Number(v) : v;
+
+// A tab's form state and its results panel outlive leaving the tab: a job keeps polling
+// and saving while you set up the next one, and coming back has to show it rather than a
+// blank form. FORMS holds the inputs, OUTS the result cards, STATUS the live status line -
+// all keyed by service id, all reattached on render.
+const FORMS = {}, OUTS = {}, STATUS = {};
+
+function renderService(id, state){
+  const svc = SERVICES[id];
+  state = state || FORMS[id];
+  const fresh = !state;              // first open of this tab, not a re-render
+  // Seed defaults once, then keep the same object across re-renders so switching
+  // model_version does not wipe the uploaded image URL.
+  if (!state){
+    state = {};
+    svc.fields.forEach(([n,t,l,o])=>{ if (o.def!==undefined) state[n] = numOrBlank(t, o.def); });
+  }
+  FORMS[id] = state;
+  FORM_HOST.innerHTML = "";
+  const h = document.createElement("div");
+  h.className = "category"; h.textContent = svc.title;
+  FORM_HOST.appendChild(h);
+
+  // Seed defaults for whatever just became visible, twice: fix_lighting_mode's gate
+  // reads enhancement_strength, which only gets its default on the pass before.
+  const seed = ()=> svc.fields.forEach(([n,t,l,o])=>{
+    if (o.when && !o.when(state)) return;
+    if (state[n] === undefined && o.def !== undefined) state[n] = numOrBlank(t, o.def);
+  });
+  seed(); seed();
+
+  // A hidden field must not be sent: v4 with output_resolution left over from v3
+  // is a different request than the form is showing.
+  const shown = svc.fields.filter(([n,t,l,o])=> !o.when || o.when(state));
+  const keep = new Set(shown.map(f=>f[0]));
+  const areasOn = typeof svc.areas === "function" ? svc.areas(state) : !!svc.areas;
+  Object.keys(state).forEach(k=>{
+    if (!keep.has(k) && !(areasOn && k in AREAS)) delete state[k];
+  });
+
+  const grid = document.createElement("div"); grid.className = "grid";
+  shown.forEach(([name, type, label, spec])=>{
+    const o = Object.assign({}, spec, spec.by ? spec.by(state) : {});
+    if (spec.optsBy) o.opts = spec.optsBy(state);
+    const redraw = ()=> renderService(id, state);
+    const row = document.createElement("div");
+    row.className = "row" + (["textarea","json","file","files","sizepick"].includes(type) ? " full" : "");
+    row.innerHTML = `<div class="lbl">${label}${o.hint?`<small>${o.hint}</small>`:""}</div>`;
+    const cell = document.createElement("div");
+
+    if (type === "file"){
+      const url = document.createElement("input");
+      url.type = "text"; url.placeholder = "https://... or drop a file below";
+      url.value = state[name] || "";
+      url.oninput = ()=> state[name] = url.value;
+      cell.appendChild(url);
+      const z = dropZone(async f=>{
+        z.innerHTML = "uploading...";
+        const r = await uploadFile(f);
+        if (r){ url.value = r.url; state[name] = r.url;
+          z.innerHTML = `<b>${f.name}</b><br>${r.url}`;
+          if (f.type.startsWith("image/")){ const im=document.createElement("img"); im.src=r.local; im.style.maxHeight="120px"; im.style.marginTop="8px"; z.appendChild(im); }
+        } else z.innerHTML = "<b>upload failed</b>";
+      }, name);
+      z.style.marginTop = "6px";
+      cell.appendChild(z);
+    } else if (type === "files"){
+      // One URL per line, and the drop zone appends rather than replaces - these fields
+      // take up to 9 references and dropping the second file must not lose the first.
+      const ta = document.createElement("textarea");
+      ta.rows = 3; ta.placeholder = "https://... one URL per line";
+      ta.value = (state[name] || []).join("\n");
+      const sync = ()=> state[name] = ta.value.split("\n").map(s=>s.trim()).filter(Boolean);
+      ta.oninput = sync;
+      cell.appendChild(ta);
+      const z = dropZone(async f=>{
+        z.innerHTML = "uploading...";
+        const r = await uploadFile(f);
+        if (r){ ta.value = (ta.value.trim() ? ta.value.trim()+"\n" : "") + r.url; sync();
+          z.innerHTML = `<b>added ${f.name}</b><br>${state[name].length} file(s)`; }
+        else z.innerHTML = "<b>upload failed</b>";
+      }, name);
+      z.style.marginTop = "6px";
+      cell.appendChild(z);
+    } else if (type === "select"){
+      const s = document.createElement("select");
+      const cast = v => o.num ? Number(v) : v;
+      o.opts.forEach(v=>{ const op=document.createElement("option"); op.value=op.textContent=v; s.appendChild(op); });
+      // The stored value may be illegal for the version just picked (v3 + "heavy").
+      if (!o.opts.map(String).includes(String(state[name]))) state[name] = cast(o.def);
+      s.value = state[name];
+      s.onchange = ()=>{ state[name] = cast(s.value); if (o.rerender) redraw(); };
+      cell.appendChild(s);
+    } else if (type === "sizepick"){
+      // Two rows of chips, ratio then pixels. Only `size` is ever stored - the ratio is
+      // read back off the chosen value, so no extra key leaks into the request body.
+      const groups = o.opts, ratios = Object.keys(groups);
+      const ratioOf = v => ratios.find(r => groups[r].includes(v));
+      if (!ratioOf(state[name])) state[name] = o.def;
+      const box = document.createElement("div"); box.className = "pick";
+      const rrow = document.createElement("div"); rrow.className = "pick-row";
+      const srow = document.createElement("div"); srow.className = "pick-row";
+      box.append(rrow, srow); cell.appendChild(box);
+      const chip = (on, html, fn)=>{
+        const b = document.createElement("div");
+        b.className = "chip" + (on ? " on" : ""); b.innerHTML = html; b.onclick = fn; return b;
+      };
+      const mp = v => (v.split("x").reduce((a,b)=> a*b, 1) / 1e6).toFixed(1) + " MP";
+      const paint = ()=>{
+        const cur = state[name], r = ratioOf(cur), tier = groups[r].indexOf(cur);
+        rrow.innerHTML = ""; srow.innerHTML = "";
+        ratios.forEach(k=>{
+          const [w,h] = k.split(":").map(Number), u = 17 / Math.max(w,h);
+          rrow.appendChild(chip(k === r,
+            `<i style="width:${(w*u).toFixed(1)}px;height:${(h*u).toFixed(1)}px"></i>${k}`,
+            // same tier on the new shape, so switching 4:3 -> 16:9 does not drop 4 MP to 1
+            ()=>{ state[name] = groups[k][tier]; paint(); }));
+        });
+        groups[r].forEach(v => srow.appendChild(
+          chip(v === cur, `<b>${v}</b><s>${mp(v)}</s>`, ()=>{ state[name] = v; paint(); })));
+      };
+      paint();
+    } else if (type === "bool"){
+      const c = document.createElement("input");
+      if (state[name] === undefined) state[name] = !!o.def;
+      c.type = "checkbox"; c.checked = !!state[name];
+      c.onchange = ()=>{ state[name] = c.checked; if (o.rerender) redraw(); };
+      cell.appendChild(c);
+    } else if (type === "textarea" || type === "json"){   // json is parsed at send time
+      const t = document.createElement("textarea");
+      t.rows = o.rows||4; t.value = state[name] ?? o.def ?? "";
+      t.oninput = ()=> state[name] = t.value;
+      // The prompt box, and only that, carries the library and the character count.
+      // Titles are never sent anywhere, so they are not counted.
+      if (name === "prompt"){
+        const cnt = document.createElement("span"); cnt.className = "pcount";
+        row.querySelector(".lbl").appendChild(cnt);
+        const apply = v => { state[name] = v; cnt.textContent = v.length + " characters"; };
+        t.oninput = ()=> apply(t.value);
+        cell.appendChild(promptBar(id, t, apply, fresh));
+        apply(t.value);
+      }
+      cell.appendChild(t);
+    } else {
+      const i = document.createElement("input");
+      i.type = type;
+      if (o.min!==undefined) i.min=o.min; if (o.max!==undefined) i.max=o.max;
+      if (o.step!==undefined) i.step=o.step;
+      // by() can move the range (realism is 0-5 on v1, 0-3 on v3) - clamp the carried value.
+      if (state[name] === undefined && o.def !== undefined) state[name] = numOrBlank(type, o.def);
+      if (type==="number" && state[name] !== "" && o.max!==undefined && Number(state[name]) > o.max)
+        state[name] = numOrBlank(type, o.def);
+      if (state[name] !== undefined) i.value = state[name];
+      i.oninput = ()=> state[name] = numOrBlank(type, i.value);
+      cell.appendChild(i);
+    }
+    row.appendChild(cell);
+    grid.appendChild(row);
+  });
+  FORM_HOST.appendChild(grid);
+
+  if (areasOn){
+    const t = document.createElement("div"); t.className="category"; t.textContent="Keep unchanged";
+    FORM_HOST.appendChild(t);
+    const box = document.createElement("div"); box.className="toggles";
+    Object.entries(AREAS).forEach(([k,v])=>{
+      if (state[k] === undefined) state[k] = v;
+      const l = document.createElement("label");
+      l.innerHTML = `<input type="checkbox" ${state[k]?"checked":""}> ${k}`;
+      l.querySelector("input").onchange = e => state[k] = e.target.checked;
+      box.appendChild(l);
+    });
+    FORM_HOST.appendChild(box);
+  }
+
+  const acts = document.createElement("div"); acts.className = "actions";
+  const send = document.createElement("button"); send.textContent = "Queue request";
+  // Drops every upload on this tab and leaves the prompt (and the rest of the settings)
+  // alone, so the same prompt can be re-run against new media.
+  const clear = document.createElement("button");
+  clear.className = "ghost"; clear.textContent = "Clear inputs";
+  clear.onclick = ()=>{
+    svc.fields.forEach(([n,t])=>{ if (t==="file" || t==="files") delete state[n]; });
+    renderService(id, state);
+  };
+  const status = STATUS[id] || (STATUS[id] = document.createElement("span"));
+  status.className = status.className || "note";
+  acts.append(send, clear, status);
+  FORM_HOST.appendChild(acts);
+  // Same node every render, so a tracker that is mid-poll keeps writing into the panel
+  // the tab shows when you come back to it.
+  const out = OUTS[id] || (OUTS[id] = document.createElement("div"));
+  FORM_HOST.appendChild(out);
+
+  send.onclick = async ()=>{
+    const body = {};
+    const types = Object.fromEntries(svc.fields.map(f=>[f[0], f[1]]));
+    for (const [k, v] of Object.entries(state)){
+      if (v === "" || v === undefined) continue;
+      if (Array.isArray(v) && !v.length) continue;
+      if (types[k] === "json"){
+        try { body[k] = JSON.parse(v); }
+        catch(e){ local("err", `${k} is not valid JSON: ${e.message}`); return; }
+        continue;
+      }
+      body[k] = v;
+    }
+    if (svc.shape) svc.shape(body);
+    send.disabled = true;
+    status.className = "note";        // clear a "bad" left over from the last run
+    status.textContent = "queuing...";
+    // fal queues at the endpoint id itself and polls; Enhancor queues at /queue and webhooks;
+    // BytePlus takes the model in the body, so one endpoint serves every model it hosts.
+    const ark = svc.ark || svc.arkImage;
+    // Kling puts the model in the path, and motion control is a different path on the same
+    // model - so the endpoint is a function of the form state, not a constant.
+    const kl = svc.kling && (typeof svc.kling === "function" ? svc.kling(state) : svc.kling);
+    const r = svc.fal
+      ? await callApi(`https://queue.fal.run/${svc.fal}`, body, { autoWebhook:false })
+      : kl
+      ? await callApi(KLING + kl, body, { autoWebhook:false })
+      : ark
+      ? await callApi(ark, Object.assign({ model: svc.model }, body), { autoWebhook:false })
+      : await callApi(`${svc.base}/queue`, body);
+    send.disabled = false;
+    if (!r.ok){ status.textContent = `failed (${r.status})`; status.className="note bad"; return; }
+    const j = r.json || {};
+    const abbr = outAbbr(svc, state);
+    // Image generation on ModelArk is synchronous - this one response carries the results.
+    if (svc.arkImage){
+      const urls = svc.results(j);
+      if (!urls.length){
+        status.className = "note bad"; status.textContent = "no image in the response";
+        local("err", `seedream returned no image: ${(r.text||"").slice(0,300)}`); return;
+      }
+      status.className = "note"; status.textContent = `DONE (${urls.length})`;
+      urls.forEach(u => showResult(out, u, svc.model, abbr));
+      return;
+    }
+    // Kling's top-level request_id names the HTTP call, not the job - the task id is
+    // nested, as `id` on the new routes and `task_id` on the legacy one.
+    const rid = svc.kling ? ((j.data || {}).id || (j.data || {}).task_id)
+                          : (j.requestId || j.request_id || j.id);
+    status.className = "note"; status.textContent = `request ${rid||"?"} queued`;
+    if (!rid) return;
+    if (svc.fal) trackFal(svc, j, status, out, abbr);
+    else if (svc.kling) trackKling(rid, status, out, abbr);
+    else if (svc.ark) trackArk(svc, rid, status, out, abbr);
+    else trackRequest(svc.base, rid, r.webhookToken, status, out, abbr);
+  };
+}
+
+/* ---------- output naming ---------- */
+// The server appends the destination folder, so this is only the model half.
+function outAbbr(svc, state){
+  return typeof svc.abbr === "function" ? svc.abbr(state) : (svc.abbr || "out");
+}
+
+/* ---------- polling ---------- */
+async function trackRequest(base, requestId, token, statusEl, outEl, abbr){
+  for (let i=0; i<150; i++){
+    await new Promise(r=> setTimeout(r, 4000));
+    const r = await callApi(`${base}/status`, { request_id: requestId }, { autoWebhook:false });
+    const j = r.json || {};
+    statusEl.textContent = `${requestId} :: ${j.status || r.status} ${j.cost!==undefined?`(cost ${j.cost})`:""}`;
+    const hook = token ? (await (await fetch("/api/results")).json()).results[token] : null;
+    const url = hook?.result || j.result || j.output || j.url;
+    if (url){
+      reportFal({ text: JSON.stringify(hook||j) + " " + url, headers: r.headers }, requestId);
+      statusEl.textContent = `${requestId} :: DONE`; showResult(outEl, url, requestId, abbr); return;
+    }
+    if (["FAILED","ERROR"].includes(j.status)){ statusEl.className="note bad"; return; }
+    if (j.status === "COMPLETED" && !url && i>2){
+      local("warn", `${requestId} COMPLETED but no result URL in /status - waiting on webhook`);
+    }
+  }
+  statusEl.textContent = `${requestId} :: timed out polling`;
+}
+
+/* ---------- fal polling ---------- */
+// No webhook on this path: submit hands back status_url and response_url, both GETs.
+// Using the URLs fal returns rather than building them - for a nested endpoint id
+// (bytedance/seedream/v5/pro/edit) the request path is not the endpoint id.
+async function trackFal(svc, sub, statusEl, outEl, abbr){
+  const get = url => callApi(url, null, { method:"GET", autoWebhook:false });
+  for (let i=0; i<150; i++){
+    await new Promise(r=> setTimeout(r, 4000));
+    const s = await get(sub.status_url);
+    if (s.status >= 400 || s.status === 0){
+      statusEl.className = "note bad";
+      statusEl.textContent = `${sub.request_id} :: polling failed (${s.status})`;
+      return;
+    }
+    const j = s.json || {};
+    statusEl.textContent = `${sub.request_id} :: ${j.status || s.status}` +
+      (j.queue_position !== undefined && j.queue_position !== null ? ` (queue ${j.queue_position})` : "");
+    if (j.status !== "COMPLETED") continue;
+
+    const r = await get(sub.response_url);
+    const urls = svc.results(r.json || {});
+    if (!urls.length){
+      statusEl.className = "note bad";
+      statusEl.textContent = `${sub.request_id} :: completed with no image URL`;
+      local("err", `${sub.request_id} completed but the response carried no image: ${(r.text||"").slice(0,300)}`);
+      return;
+    }
+    statusEl.textContent = `${sub.request_id} :: DONE (${urls.length})`;
+    urls.forEach(u => showResult(outEl, u, sub.request_id, abbr));
+    return;
+  }
+  statusEl.textContent = `${sub.request_id} :: timed out polling`;
+}
+
+/* ---------- BytePlus polling ---------- */
+// One GET per tick until the task is terminal. Result URLs are signed and expire, which is
+// why showResult saves on sight rather than waiting for a click.
+async function trackArk(svc, id, statusEl, outEl, abbr){
+  for (let i=0; i<300; i++){
+    await new Promise(r=> setTimeout(r, 4000));
+    const r = await callApi(`${ARK}/contents/generations/tasks/${id}`, null,
+                            { method:"GET", autoWebhook:false });
+    if (r.status >= 400 || r.status === 0){
+      statusEl.className = "note bad";
+      statusEl.textContent = `${id} :: polling failed (${r.status})`;
+      return;
+    }
+    const j = r.json || {};
+    statusEl.textContent = `${id} :: ${j.status || r.status}` +
+      (j.usage && j.usage.completion_tokens ? ` (${j.usage.completion_tokens} tokens)` : "");
+    if (["failed","cancelled","expired"].includes(j.status)){
+      statusEl.className = "note bad";
+      local("err", `${id} ${j.status}: ${(j.error && j.error.message) || (r.text||"").slice(0,300)}`);
+      return;
+    }
+    if (j.status !== "succeeded") continue;
+    const urls = svc.results(j);
+    if (!urls.length){
+      statusEl.className = "note bad";
+      statusEl.textContent = `${id} :: succeeded with no video URL`;
+      local("err", `${id} succeeded but the task carried no video: ${(r.text||"").slice(0,300)}`);
+      return;
+    }
+    statusEl.textContent = `${id} :: DONE`;
+    urls.forEach(u => showResult(outEl, u, id, abbr));
+    // Only present when the form asked for it - the chaining frame for the next clip.
+    if (j.content && j.content.last_frame_url)
+      showResult(outEl, j.content.last_frame_url, id + "-last", abbr);
+    return;
+  }
+  statusEl.textContent = `${id} :: timed out polling`;
+}
+
+/* ---------- Kling polling ---------- */
+// One GET covers every Kling model, new route or legacy: /tasks answers for both, so the
+// 2.1 Master tab and the 3.0 tab poll the same way. 4k and 15s jobs run long, hence the
+// longer ceiling than fal's - 450 ticks is half an hour.
+async function trackKling(id, statusEl, outEl, abbr){
+  for (let i=0; i<450; i++){
+    await new Promise(r=> setTimeout(r, 4000));
+    const r = await callApi(`${KLING}/tasks?task_ids=${encodeURIComponent(id)}`, null,
+                            { method:"GET", autoWebhook:false });
+    if (r.status >= 400 || r.status === 0){
+      statusEl.className = "note bad";
+      statusEl.textContent = `${id} :: polling failed (${r.status})`;
+      return;
+    }
+    const t = (((r.json || {}).data) || [])[0] || {};
+    const units = (t.billing || []).map(b => b.amount).filter(Boolean).join(" + ");
+    statusEl.textContent = `${id} :: ${t.status || r.status}` + (units ? ` (${units} units)` : "");
+    if (t.status === "failed"){
+      statusEl.className = "note bad";
+      local("err", `${id} failed: ${t.message || (r.text||"").slice(0,300)}`);
+      return;
+    }
+    if (t.status !== "succeeded") continue;
+    const urls = (t.outputs || []).map(o => o.url).filter(Boolean);
+    if (!urls.length){
+      statusEl.className = "note bad";
+      statusEl.textContent = `${id} :: succeeded with no video URL`;
+      local("err", `${id} succeeded but the task carried no output: ${(r.text||"").slice(0,300)}`);
+      return;
+    }
+    statusEl.textContent = `${id} :: DONE (${urls.length})`;
+    urls.forEach(u => showResult(outEl, u, id, abbr));
+    return;
+  }
+  statusEl.textContent = `${id} :: timed out polling`;
+}
+
+function showResult(el, url, id, abbr){
+  const isVid = /\.(mp4|webm|mov)(\?|$)/i.test(url);
+  const c = document.createElement("div"); c.className="card"; c.style.marginTop="12px"; c.style.maxWidth="420px";
+  c.innerHTML = `${isVid?`<video src="${url}" controls></video>`:`<img src="${url}">`}
+    <div class="meta"><b>${id}</b>${url}</div>`;
+  const b = document.createElement("button"); b.className="ghost"; b.style.margin="0 9px 9px";
+  const save = async ()=>{
+    b.disabled = true; b.textContent = "Saving...";
+    const r = await post("/api/save", { url, dir: outDir(), abbr, scripts: postGen(isVid) });
+    b.disabled = false;
+    if (r.path){ b.textContent = "Saved"; b.title = r.path; }
+    else { b.textContent = "Retry save"; local("err", "save failed: " + (r.error||"?")); }
+  };
+  b.onclick = save;
+  c.appendChild(b);
+  el.prepend(c);
+  // Results are on their CDN, not ours - grab it the moment it lands rather than
+  // waiting for a click that might come after the URL has expired.
+  save();
+}
+
+/* Enhancor is understood to resell fal.ai. A passthrough leaks provenance in result URLs,
+   response headers and error shapes - that is stronger evidence than any model label. */
+const FAL_MARKERS = [
+  [/\bv?\d*\.?fal\.media\b/i, "result hosted on fal.media CDN"],
+  [/\bfal\.run\b|\bqueue\.fal\.run\b/i, "fal.run endpoint referenced"],
+  [/\bfal[-_]ai\b|\bfal\.ai\b/i, "fal.ai named in payload"],
+  [/"detail"\s*:\s*\[\s*{[^}]*"loc"/i, "FastAPI/pydantic error shape - fal's validation format"],
+  [/\bx-fal-[a-z-]+/i, "x-fal-* response header"],
+];
+function falFingerprint(res){
+  const hay = (res.text || "") + " " + JSON.stringify(res.headers || {});
+  return FAL_MARKERS.filter(([re])=> re.test(hay)).map(([,label])=> label);
+}
+function reportFal(res, context){
+  const hits = falFingerprint(res);
+  if (hits.length) local("hook", `FAL.AI PROVENANCE (${context}): ${hits.join("; ")}`);
+  return hits;
+}
+
+/* ---------- gallery ---------- */
+async function renderGallery(){
+  pane.innerHTML = `<div class="category">Results</div><div class="cards" id="g-cards"></div>
+    <div class="category" style="margin-top:16px">Request history</div>
+    <table><thead><tr><th>Time (AEST)</th><th>Endpoint</th><th>Status</th><th>Request ID</th></tr></thead><tbody id="g-h"></tbody></table>`;
+  const d = await (await fetch("/api/results")).json();
+  const cards = document.getElementById("g-cards");
+  const entries = Object.entries(d.results);
+  if (!entries.length) cards.innerHTML = `<p class="note">No webhook results yet.</p>`;
+  entries.reverse().forEach(([tok, res])=>{
+    const url = res.result || res.output || res.url;
+    if (!url) return;
+    const isVid = /\.(mp4|webm|mov)(\?|$)/i.test(url);
+    const c = document.createElement("div"); c.className="card";
+    c.innerHTML = `${isVid?`<video src="${url}" controls></video>`:`<img src="${url}">`}
+      <div class="meta"><b>${res.request_id||tok}</b>${res.status||""}<br>${url}</div>`;
+    const b = document.createElement("button"); b.className="ghost"; b.textContent="Save"; b.style.margin="0 9px 9px";
+    // No form state here, so no input filename to name it after - folder only.
+    b.onclick = async ()=>{
+      const r = await post("/api/save", { url, dir: outDir(), scripts: postGen(isVid) });
+      b.textContent = r.path ? "Saved" : "Failed";
+    };
+    c.appendChild(b); cards.appendChild(c);
+  });
+  const tb = document.getElementById("g-h");
+  d.history.slice().reverse().forEach(h=>{
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td class="mono">${h.ts.replace("T"," ").slice(0,19)}</td>
+      <td class="mono">${esc(h.url.replace(API,""))}</td>
+      <td><span class="pill ${h.status<300?"p-live":"p-err"}">${h.status}</span></td>
+      <td class="mono">${h.requestId||"-"}</td>`;
+    tb.appendChild(tr);
+  });
+}
+
+render(GROUPS[0].items[0][0]);
+local("sys","console ready - requests and responses appear here as they happen");
+</script>
+</body>
+</html>
