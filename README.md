@@ -319,7 +319,7 @@ next to the status as they land.
 | Kling O1 | `/omni-video/kling-o1` | same input set, 720p/1080p, 3-10s, no native audio and no multi-shot |
 | Kling 2.6 | `/image-to-video/kling-2.6` | first + optional last frame, up to 2 voices, native audio, 5s/10s |
 | Kling 2.6 (motion control) | `/motion-control/kling-2.6` | as 3.0's, without elements |
-| Kling 2.5 Turbo | `/image-to-video/kling-2.5-turbo` | first + optional last frame, 720p/1080p, 5s/10s |
+| Kling 2.5 Turbo | `/image-to-video/kling-2.5-turbo` | first + optional last frame, native audio (the tab sends `off` - silent is not the platform default), 720p/1080p, 5s/10s |
 | Kling 2.1 Master | `/v1/videos/image2video`, `model_name: kling-v2-1-master` | legacy route: `cfg_scale`, `negative_prompt`, `mode` std/pro, 5s/10s |
 
 Kling 3.0 Turbo (`/image-to-video/kling-3.0-turbo`) exists and is not wired up - it was not asked

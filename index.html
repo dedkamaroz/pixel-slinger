@@ -952,6 +952,9 @@ const klingVideos = {
         hint:"required - jpg/png, max 50 MB, at least 300px a side, aspect 1:2.5 to 2.5:1"}],
       ["last_frame","file","Last frame",{
         hint:"optional - needs a first frame, and forces 1080p"}],
+      ["audio","select","Audio",{opts:["native","off"],def:"off",
+        hint:"native is a generated soundtrack - the platform default, so this tab sends off "
+           + "unless native is picked"}],
       ["resolution","select","Resolution",{opts:["720p","1080p"],def:"720p",
         hint:"first-plus-last-frame runs at 1080p only"}],
       ["duration","select","Duration (s)",{opts:["5","10"],def:"5"}],
