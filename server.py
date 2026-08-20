@@ -33,14 +33,14 @@ import urllib.request
 import uuid
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 ROOT = Path(__file__).parent
 UPLOADS = ROOT / "uploads"
 OUTPUTS = ROOT / "outputs"
 PORT = int(os.environ.get("PORT", "8787"))
 AEST = timezone(timedelta(hours=10), "AEST")
-MAX_UPLOAD = 40 * 1024 * 1024
+MAX_UPLOAD = 200 * 1024 * 1024   # feature videos go to 200 MB on the Kling tabs
 
 STATE = {"public_base": "", "tunnel": "off", "results": {}, "history": []}
 PIDFILE = ROOT / ".server.pid"
@@ -294,7 +294,7 @@ def postgen_scripts(prefix):
         if not argv:
             continue
         out.append({"key": k.strip(), "n": int(m.group(1)),
-                    "label": Path(argv[0]).stem, "cmd": v.strip()})
+                    "label": PureWindowsPath(argv[0]).stem, "cmd": v.strip()})
     return sorted(out, key=lambda s: s["n"])
 
 
@@ -493,6 +493,11 @@ class Handler(BaseHTTPRequestHandler):
             log("hook", f"webhook {token} <- {json.dumps(body)[:300]}", {"body": body})
             return self._json(200, {"received": True})
 
+        # The page posts files as raw bytes with the name in the query string - a 200 MB
+        # video must never become a base64 JSON document. Anything else here is JSON.
+        if path == "/api/upload" and "?" in self.path:
+            return self._upload_raw(self.path.split("?", 1)[1])
+
         try:
             data = self._read_json()
         except Exception as e:
@@ -510,6 +515,20 @@ class Handler(BaseHTTPRequestHandler):
     def _upload(self, data):
         name = os.path.basename(data.get("name", "file.bin")).replace(" ", "_")
         raw = base64.b64decode(data.get("data", "").split(",")[-1])
+        return self._store_upload(name, raw)
+
+    def _upload_raw(self, query):
+        name = os.path.basename(
+            urllib.parse.parse_qs(query).get("name", ["file.bin"])[0]).replace(" ", "_")
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > MAX_UPLOAD:
+            return self._json(413, {"error": "file too large"})
+        return self._store_upload(name, self.rfile.read(length))
+
+    def _store_upload(self, name, raw):
+        # Kling's fetcher 400s on URL-illegal bytes in the filename ([ ] et al.) with a
+        # misleading "not valid base64" - keep names to the unreserved set from the start.
+        name = re.sub(r"[^A-Za-z0-9._-]", "_", name)
         if len(raw) > MAX_UPLOAD:
             return self._json(413, {"error": "file too large"})
         UPLOADS.mkdir(exist_ok=True)
@@ -591,8 +610,10 @@ class Handler(BaseHTTPRequestHandler):
         abbr = re.sub(r"[^A-Za-z0-9_-]", "", abbr or "")
         if not abbr:
             return f"{datetime.now(AEST).strftime('%Y%m%d_%H%M%S')}_{src}"
-        # A drive root (C:\) has no name component.
-        folder = dest_dir.name or dest_dir.drive.rstrip(":\\/") or "out"
+        # A drive root (C:\) has no name component. PureWindowsPath reads both slash
+        # styles, so a Windows folder named on a Mac still yields its last component.
+        p = PureWindowsPath(dest_dir)
+        folder = p.name or p.drive.rstrip(":\\/") or "out"
         return f"{abbr}_{folder}{ext}"
 
     def _save(self, data):

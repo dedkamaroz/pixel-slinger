@@ -100,6 +100,17 @@ def test_http_roundtrip():
         assert r.read() == payload
         assert r.headers["Content-Type"] == "image/png"
 
+    # The binary path the page uses: the file is the request body, the name rides in the
+    # query string - no base64 copy in a JSON document on either side. Brackets and spaces
+    # in the name are squashed: Kling 400s on URL-illegal bytes in the fetch URL.
+    req = urllib.request.Request(base + "/api/upload?name=raw%20clip%5B1%5D.bin", data=payload,
+                                 headers={"Content-Type": "application/octet-stream"})
+    with urllib.request.urlopen(req, timeout=5) as r:
+        up2 = json.loads(r.read())
+    assert up2["size"] == len(payload) and up2["name"].endswith("_raw_clip_1_.bin"), up2
+    with urllib.request.urlopen(up2["local"], timeout=5) as r:
+        assert r.read() == payload
+
     hook = post("/webhook/tok123", {"request_id": "r1", "result": "http://x/y.png", "status": "success"})
     assert hook["received"] is True
     assert server.STATE["results"]["tok123"]["result"] == "http://x/y.png"
@@ -119,6 +130,7 @@ def test_http_roundtrip():
     assert "webhookUrl" not in body and "webhook_url" not in body, body
 
     Path(server.UPLOADS / up["name"]).unlink()
+    Path(server.UPLOADS / up2["name"]).unlink()
     srv.shutdown()
 
 

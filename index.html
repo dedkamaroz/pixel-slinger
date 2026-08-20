@@ -501,9 +501,12 @@ async function callApi(url, body, opts={}){
   return post("/api/call", { url, body, method: opts.method || "POST", autoWebhook: opts.autoWebhook !== false });
 }
 async function uploadFile(file){
-  local("sys", `reading ${file.name} (${Math.round(file.size/1024)} KB)`);
-  const data = await new Promise((res,rej)=>{ const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=rej; fr.readAsDataURL(file); });
-  const r = await post("/api/upload", { name:file.name, data });
+  local("sys", `uploading ${file.name} (${Math.round(file.size/1024)} KB)`);
+  // The file goes as the request body, not as a base64 data URL - readAsDataURL plus
+  // JSON.stringify held three copies of a 100 MB video in the renderer and Chrome
+  // killed the tab for it (Aw, Snap error 5).
+  const r = await (await fetch("/api/upload?name="+encodeURIComponent(file.name),
+                               { method:"POST", body:file })).json();
   if (r.error){ local("err","upload failed: "+r.error); return null; }
   if (!r.reachable) local("warn","tunnel is down - the provider cannot fetch this URL. Start cloudflared, then restart the server.");
   return r;
@@ -957,7 +960,7 @@ const klingVideos = {
            + "unless native is picked"}],
       ["resolution","select","Resolution",{opts:["720p","1080p"],def:"720p",
         hint:"first-plus-last-frame runs at 1080p only"}],
-      ["duration","select","Duration (s)",{opts:["5","10"],def:"5"}],
+      ["duration","select","Duration (s)",{opts:["5","10"],def:"10"}],
       ...KL_OPTS,
     ]
   },
