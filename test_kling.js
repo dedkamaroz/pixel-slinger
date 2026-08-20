@@ -94,6 +94,13 @@ assert.deepStrictEqual(b.contents, []);
 assert.strictEqual(b.settings, undefined, "no settings block when nothing is set");
 assert.deepStrictEqual(b.options, { watermark_info: { enabled: false } });
 
+// 2.5 Turbo takes the same settings.audio switch as 3.0 and 2.6. The platform default
+// is a generated soundtrack, so the tab must offer the switch and send "off" verbatim.
+assert(shown(SERVICES.k25t, {}).includes("audio"), "2.5 Turbo must offer the audio switch");
+b = shape(SERVICES.k25t, { first_frame: "https://x/a.jpg", audio: "off", duration: "10" });
+assert.strictEqual(b.settings.audio, "off");
+assert.strictEqual(b.settings.duration, 10);
+
 // --- 2.1 Master keeps the legacy flat body -----------------------------------
 // It is the odd one out: no contents envelope, and the model rides in model_name.
 b = shape(SERVICES.k21m, { image: "https://x/a.jpg", prompt: "p", cfg_scale: 0.5,
