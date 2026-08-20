@@ -232,9 +232,9 @@ Saved output can be put through local scripts. **Videos** get up to three, in an
 image, and vice versa. Both come from `.env`, one line per script:
 
 ```
-POSTVIDGEN_1="C:\Users\dedka\Documents\scripts\original_rppg\run_rppg.bat"
-POSTVIDGEN_2="D:\Tools\deai-skill\gpuvideo.bat"
-POSTVIDGEN_3="ffm.bat"
+POSTVIDGEN_1="C:\Scripts\PostProcessing_Script.bat"
+POSTVIDGEN_2="C:\Cats\ScratchingPost_Break.cat"
+POSTVIDGEN_3="Cat\To-Werk.kek"
 
 POSTIMGGEN_1="D:\Tools\upscale\img.bat"
 ```
