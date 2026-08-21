@@ -78,6 +78,38 @@ def test_tunnel_regex():
     assert server.TUNNEL_RE.search("no url here") is None
 
 
+def test_tunnel_truly_down():
+    """Rotate only when the tunnel itself is dead. A transient blip (recheck passes)
+    or a local internet outage (net probe fails) must keep the tunnel - killing it
+    there just churns the public URL and breaks queued uploads."""
+    orig_reach, orig_net = server._tunnel_reachable, server._net_up
+    try:
+        # transient blip: the instant recheck passes, tunnel stays
+        server._tunnel_reachable = lambda: True
+        server._net_up = lambda: True
+        assert server._tunnel_truly_down() is False
+        # genuinely dead: recheck fails while the internet is fine
+        server._tunnel_reachable = lambda: False
+        assert server._tunnel_truly_down() is True
+        # local outage: the internet probe fails too, so the tunnel is kept
+        server._net_up = lambda: False
+        assert server._tunnel_truly_down() is False
+    finally:
+        server._tunnel_reachable, server._net_up = orig_reach, orig_net
+
+
+def test_flap_guard():
+    server._rotations.clear()
+    base = time.time()
+    server._rotations[:] = [base - 100, base - 50]
+    assert not server._flapping(base)                 # 2 in the window: still fine
+    server._rotations.append(base)
+    assert server._flapping(base)                     # 3rd inside 15 min: flapping
+    server._rotations[:] = [base - 901, base - 50, base]
+    assert not server._flapping(base)                 # the oldest aged out
+    server._rotations.clear()
+
+
 def test_http_roundtrip():
     """Boot the real server, upload a file, hit it back over HTTP, fire a webhook."""
     server.PORT = 8899
