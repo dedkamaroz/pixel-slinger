@@ -82,12 +82,6 @@ assert.strictEqual(b.contents.find(p => p.type === "feature_video").id, "video_1
 assert.deepStrictEqual(b.contents.find(p => p.type === "element"),
   { type: "element", element_id: "77", id: "Zhang" });
 
-// 2.6's voices ride in contents as well, not in settings.
-b = shape(SERVICES.k26, { prompt: "she says hello", first_frame: "https://x/a.jpg",
-  voices: [{ voice_id: "v1", id: "sweet" }] });
-assert.deepStrictEqual(b.contents.find(p => p.type === "voice"),
-  { type: "voice", voice_id: "v1", id: "sweet" });
-
 // An empty form must not invent parts or an empty settings block.
 b = shape(SERVICES.k25t, {});
 assert.deepStrictEqual(b.contents, []);
@@ -140,8 +134,14 @@ const mc = shown(SERVICES.k30, { mode: "motion-control" });
   assert(mc.includes(f), `motion control needs ${f}`));
 ["first_frame", "last_frame", "multi_shot", "duration"].forEach(f =>
   assert(!mc.includes(f), `${f} must be hidden in motion control`));
-assert(!shown(SERVICES.k26, { mode: "motion-control" }).includes("voices"),
-  "voices belong to 2.6's image-to-video mode only");
+// Voices went with the audio control - they only ever spoke over a native soundtrack,
+// so the field could not do anything. Nothing may put it back on a form or on the wire.
+KLING_MODELS.forEach(id => {
+  assert(!SERVICES[id].fields.some(([n]) => n === "voices"), `${id} must not offer voices`);
+  const out = shape(SERVICES[id], { voices: [{ voice_id: "v1", id: "sweet" }] });
+  assert(!(out.contents || []).some(p => p.type === "voice"), `${id} must not send a voice part`);
+  assert.strictEqual(out.voices, undefined, `${id} must not pass voices through`);
+});
 
 // --- enums line up with their defaults ---------------------------------------
 // A select whose default is not one of its own options renders blank, and the blank is
