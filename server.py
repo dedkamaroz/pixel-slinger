@@ -41,6 +41,11 @@ OUTPUTS = ROOT / "outputs"
 PORT = int(os.environ.get("PORT", "8787"))
 AEST = timezone(timedelta(hours=10), "AEST")
 MAX_UPLOAD = 200 * 1024 * 1024   # feature videos go to 200 MB on the Kling tabs
+# The Enhancor tabs are built and working but switched off - set ENHANCOR=1 in start.bat to
+# bring them back. The page carries the same flag as a literal so it can be read without a
+# server (test_kling.js does exactly that); this rewrites it on the way out rather than
+# making the nav wait on /api/config, which is built before the first fetch resolves.
+ENHANCOR_ON = os.environ.get("ENHANCOR", "0").strip().lower() in ("1", "true", "yes", "on")
 
 STATE = {"public_base": "", "tunnel": "off", "results": {}, "history": []}
 PIDFILE = ROOT / ".server.pid"
@@ -167,29 +172,50 @@ def log(kind, text, meta=None):
 
 
 # --- public tunnel -------------------------------------------------------------
-# Two transports, tried as a ring. cloudflared is the default - but its data plane rides
-# UDP/TCP 7844, which some networks (VPNs, routers, ISPs) blackhole; the edge then serves
-# 530 forever while the process looks alive. localhost.run is plain ssh on port 22, which
-# those same networks almost always pass. The watchdog walks the ring until one works.
+# Four transports, tried as a ring. What separates them is the port they leave the box on,
+# because that is what a hostile network actually blocks:
+#
+#   cloudflared      QUIC over UDP 7844    default
+#   cloudflared-h2   HTTP/2 over TCP 7844  for networks that drop UDP but pass TCP
+#   localhost.run    ssh over TCP 22
+#   pinggy           ssh over TCP 443      last resort - the only one on an ordinary port
+#
+# Measured on 22/08/2026 rather than read off the docs: --protocol http2 moves the data
+# plane to TCP 7844, *not* to 443, so it is a genuinely different transport but not a
+# 443-only one. pinggy is the 443-only one, and it is last because its free tunnels expire
+# after 60 minutes - a URL that churns hourly beats no tunnel, and beats nothing else.
 
-TUNNEL_RE = re.compile(r"https://[a-z0-9.-]+\.(?:trycloudflare\.com|lhr\.life)\b")
+TUNNEL_RE = re.compile(r"https://[a-z0-9.-]+\."
+                       r"(?:trycloudflare\.com|lhr\.life|free\.pinggy\.net|run\.pinggy-free\.link)\b")
+
+# Shared by both ssh transports. ExitOnForwardFailure earns its place: without it ssh sits
+# there looking alive with no forward at all, and the failure only surfaces a cycle later.
+_SSH_OPTS = ["-o", "StrictHostKeyChecking=accept-new",
+             "-o", "ServerAliveInterval=30",
+             "-o", "ExitOnForwardFailure=yes"]
 
 
 def _tunnel_cmd(kind):
-    if kind == "cloudflared":
+    if kind.startswith("cloudflared"):
         exe = shutil.which("cloudflared")
-        return exe and [exe, "tunnel", "--url", f"http://127.0.0.1:{PORT}", "--no-autoupdate"]
+        if not exe:
+            return None
+        cmd = [exe, "tunnel", "--url", f"http://127.0.0.1:{PORT}", "--no-autoupdate"]
+        return cmd + ["--protocol", "http2"] if kind.endswith("-h2") else cmd
     exe = shutil.which("ssh")
+    if not exe:
+        return None
+    if kind == "pinggy":
+        # -R 0:... lets pinggy pick the remote port; it announces two https URLs on the
+        # session channel. No account and no key - an unauthenticated tunnel simply expires
+        # after an hour, which reaches the watchdog as an ordinary process death.
+        return [exe, "-T", "-p", "443"] + _SSH_OPTS + ["-R", f"0:127.0.0.1:{PORT}", "a.pinggy.io"]
     # no -N: localhost.run's sshd announces the tunnel URL on the session channel and
     # drops session-less connections inside a minute. -T alone keeps the box-drawing off.
-    return exe and [exe, "-T",
-                    "-o", "StrictHostKeyChecking=accept-new",
-                    "-o", "ServerAliveInterval=30",
-                    "-o", "ExitOnForwardFailure=yes",
-                    "-R", f"80:127.0.0.1:{PORT}", "nokey@localhost.run"]
+    return [exe, "-T"] + _SSH_OPTS + ["-R", f"80:127.0.0.1:{PORT}", "nokey@localhost.run"]
 
 
-TUNNEL_KINDS = ("cloudflared", "localhost.run")
+TUNNEL_KINDS = ("cloudflared", "cloudflared-h2", "localhost.run", "pinggy")
 _tunnel_kind = 0
 
 
@@ -283,18 +309,27 @@ _rotations = []
 
 
 def _flapping(now):
-    """True once 3+ rotations happened inside 15 minutes - the ring is churning, which
-    means the network itself is the problem and more rotations will not help."""
+    """True once the ring has churned through more than one full lap inside 15 minutes.
+    One lap is the ring doing its job on a network where only the last transport works;
+    a second lap means the network itself is the problem and more rotations will not help."""
     _rotations[:] = [t for t in _rotations if now - t < 900]
-    return len(_rotations) >= 3
+    return len(_rotations) > len(TUNNEL_KINDS)
+
+
+# Set once the live transport has answered a reachability check. A transport that proved
+# itself and then died has earned one same-kind restart before the ring moves on - which is
+# what pinggy needs, since its free tunnels expire hourly by design rather than by fault.
+_kind_proved = False
 
 
 def _tunnel_watchdog():
-    """Two failed reachability checks, or a dead tunnel process, advances to the next
-    transport in the ring - but only after a confirm recheck proves the tunnel itself
-    is down (not the box's internet), and never more than 3 rotations in 15 minutes.
-    A fresh tunnel gets its first check fast (20s), steady state is once a minute.
-    The new URL is logged; the badge picks it up via /api/config."""
+    """Two failed reachability checks, or a dead tunnel process, restarts the transport -
+    the same one if it had ever proved reachable, otherwise the next in the ring. A rotation
+    only happens once a confirm recheck proves the tunnel itself is down (not the box's
+    internet), and never more than one full lap of the ring per 15 minutes. A fresh tunnel
+    gets its first check fast (20s), steady state is once a minute. The new URL is logged;
+    the badge picks it up via /api/config."""
+    global _kind_proved
     fails, seen = 0, ""
     while True:
         time.sleep(20 if STATE["public_base"] and STATE["public_base"] != seen else 60)
@@ -302,32 +337,37 @@ def _tunnel_watchdog():
             if STATE["tunnel"] == "up" and STATE["public_base"]:
                 seen = STATE["public_base"]
                 if _tunnel_reachable():
-                    fails = 0
+                    fails, _kind_proved = 0, True
                     (ROOT / ".tunnel_kind").write_text(STATE["tunnel_kind"], encoding="utf-8")
                     continue
                 fails += 1
                 if fails < 2 or not _tunnel_truly_down():
                     continue
-                log("err", "tunnel unreachable from outside - trying the next transport. "
+                log("err", "tunnel unreachable from outside. "
                            "The public URL changes: re-upload any file already queued.")
             elif STATE["tunnel"] == "down" and any(_tunnel_cmd(k) for k in TUNNEL_KINDS):
                 if not _net_up():
                     log("sys", "internet unreachable - retrying the tunnel when the network is back")
                     continue
-                log("sys", "tunnel process died - trying the next transport...")
+                log("sys", "tunnel process died.")
             else:
                 continue
+            # Down first, then the cooldown. The other way round leaves the badge green and
+            # public_base pointing at a dead URL for the whole five minutes.
             fails = 0
-            _rotations.append(time.time())
-            if _flapping(_rotations[-1]):
-                log("err", "3 tunnel rotations in 15 minutes - the network is flapping. "
-                           "Cooling down for 5 minutes before the next attempt.")
-                time.sleep(300)
+            retry_same, _kind_proved = _kind_proved, False
             STATE["tunnel"] = "down"
             STATE["public_base"] = ""
             if _tunnel_proc and _tunnel_proc.poll() is None:
                 _tunnel_proc.terminate()
-            start_tunnel(advance=True)
+            log("sys", f"restarting {STATE['tunnel_kind']}..." if retry_same
+                       else "trying the next transport in the ring...")
+            _rotations.append(time.time())
+            if _flapping(_rotations[-1]):
+                log("err", "the whole tunnel ring churned twice inside 15 minutes - the "
+                           "network is the problem. Cooling down for 5 minutes.")
+                time.sleep(300)
+            start_tunnel(advance=not retry_same)
 
 
 def public_base():
@@ -496,6 +536,24 @@ def postprocess(path, keys):
         path = chain_output(path, before, exts)
 
 
+# --- the page -----------------------------------------------------------------
+
+ENHANCOR_FLAG = "const ENHANCOR_ON = "
+
+
+def page_html():
+    """index.html as served. The single substitution is the Enhancor switch: the file on
+    disk always reads false, so it stays readable without a server (test_kling.js evals it
+    straight off the filesystem), and ENHANCOR=1 flips it here on the way out."""
+    html = (ROOT / "index.html").read_text(encoding="utf-8")
+    if ENHANCOR_ON:
+        html, n = re.subn(re.escape(ENHANCOR_FLAG) + "false;",
+                          ENHANCOR_FLAG + "true;", html, count=1)
+        if not n:
+            log("warn", "ENHANCOR=1 but the page has no ENHANCOR_ON switch to flip")
+    return html.encode("utf-8")
+
+
 # --- HTTP handler -------------------------------------------------------------
 
 class Handler(BaseHTTPRequestHandler):
@@ -531,8 +589,7 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
 
         if path in ("/", "/index.html"):
-            f = ROOT / "index.html"
-            return self._send(200, f.read_bytes(), "text/html; charset=utf-8")
+            return self._send(200, page_html(), "text/html; charset=utf-8")
 
         if path == "/api/config":
             key, fkey, akey, kkey = api_key(), fal_key(), ark_key(), kling_key()
