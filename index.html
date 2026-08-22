@@ -854,7 +854,6 @@ const klingShape = b => {
   if (b.feature_video) media(b.feature_video, "feature_video", "video_#");
   if (b.base_video)    media(b.base_video,    "base_video",    "video_#");
   (b.elements || []).forEach(e => c.push(Object.assign({ type:"element" }, e)));
-  (b.voices   || []).forEach(v => c.push(Object.assign({ type:"voice"   }, v)));
 
   // Audio off and no watermark, on every model, with no way to ask for either from the
   // form. Both platform defaults go the other way - a generated soundtrack on the models
@@ -966,8 +965,7 @@ const klingVideos = {
     shape: klingShape,
     fields: [
       KL_MODE,
-      ["prompt","textarea","Prompt",{def:"",rows:4,
-        hint:"max 2500 chars - @name picks one of the voices defined below"}],
+      ["prompt","textarea","Prompt",{def:"",rows:4,hint:"max 2500 chars"}],
       ["first_frame","file","First frame",{when:notMC,
         hint:"required - jpg/png, max 50 MB, at least 300px a side, aspect 1:2.5 to 2.5:1"}],
       ["last_frame","file","Last frame",{when:notMC,
@@ -978,9 +976,6 @@ const klingVideos = {
         hint:"required - mp4/mov, max 100 MB, one continuous take of a single person"}],
       ["character_orientation","select","Character orientation",{opts:["video","image"],def:"video",when:isMC,
         hint:"required - which input the facing follows. image caps the motion video at 10s, video allows 30s"}],
-      ["voices","json","Voices",{when:notMC,def:"",rows:3,
-        hint:'INERT while audio is pinned off - voices only speak over a native soundtrack. '
-           + 'Kept for when audio comes back: [{"voice_id":"...","id":"sweet"}], max 2, @sweet in the prompt'}],
       ["resolution","select","Resolution",{opts:["720p","1080p"],def:"720p",
         hint:"first-plus-last-frame forces 1080p"}],
       ["duration","select","Duration (s)",{opts:["5","10"],def:"10",when:notMC,
@@ -1015,9 +1010,9 @@ const klingVideos = {
       // Pinned off with no control, same as the new routes. This is the flat route, so
       // whatever sits on the body reaches the wire - anything the form no longer offers has
       // to be cleared here, not merely left unset. The model generates no soundtrack at all,
-      // so audio is dropped rather than sent off.
-      delete b.watermark;
-      delete b.audio;
+      // so audio and voices are dropped rather than sent off. Drop a name in here whenever a
+      // field leaves this tab.
+      ["watermark", "audio", "voices"].forEach(k => delete b[k]);
       b.watermark_info = { enabled: false };
     },
     fields: [

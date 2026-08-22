@@ -296,8 +296,9 @@ Both platform defaults go the other way - a generated soundtrack on the models t
 a watermarked copy - so **both have to be sent, not merely omitted**. `test_kling.js` asserts
 that no tab has grown either control back and that neither value reaches the wire any other way.
 
-Consequence worth knowing: **2.6's Voices field is inert** while audio is off, since voices only
-speak over a native soundtrack. The field is kept, and labelled inert, for whenever audio returns.
+2.6's Voices field went with them. Voices only ever speak over a native soundtrack, so with
+audio pinned off the field could not do anything - it is gone from the form, from `klingShape`
+and from the wire, and the tests keep it that way.
 
 ### The six tabs
 
@@ -320,11 +321,10 @@ its own, so on the 3.0 and 2.6 tabs it is a `Mode` drop-down that swaps the path
 the form. `svc.kling` is therefore a function of form state, not a constant, and the output
 abbreviation changes with it (`k30` / `k30mc`) so the two never overwrite each other on disk.
 
-**Elements and voices** are managed by their own CRUD APIs
-(`/v1/general/advanced-custom-elements`, `/v1/general/custom-voices`) and are not wired into the
-console. The forms take the ids those APIs return, as JSON, in Kling's own shape:
-`[{"element_id":"123","id":"Zhang"}]`, `[{"voice_id":"...","id":"sweet"}]`. The `id` half is the
-name `@Zhang` in the prompt resolves to.
+**Elements** are managed by their own CRUD API (`/v1/general/advanced-custom-elements`) and are
+not wired into the console. The forms take the ids it returns, as JSON, in Kling's own shape:
+`[{"element_id":"123","id":"Zhang"}]`. The `id` half is the name `@Zhang` in the prompt resolves
+to. Custom voices (`/v1/general/custom-voices`) are not used at all now that audio is off.
 
 **Reference numbering.** On the omni tabs the prompt addresses inputs as `@image_1`, `@video_1`.
 Those names come from the `id` on each content part, which `klingShape` assigns in form order.
