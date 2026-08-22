@@ -256,10 +256,45 @@ def _tunnel_reachable():
         return False
 
 
+def _net_up():
+    """Neutral probe: can this box reach the internet at all? Kept separate from the
+    tunnel check on purpose - a Wi-Fi/VPN blip fails BOTH transports at once, and
+    killing a healthy tunnel over a local outage only churns the public URL."""
+    try:
+        with urllib.request.urlopen("https://www.gstatic.com/generate_204", timeout=10) as r:
+            return r.status < 500
+    except Exception:
+        return False
+
+
+def _tunnel_truly_down():
+    """Last look before sacrificing the URL: one instant recheck, then the net probe.
+    A tunnel that answers on the recheck, or a box whose own internet is down, keeps
+    its tunnel - rotating in those cases fixes nothing and breaks queued uploads."""
+    if _tunnel_reachable():
+        return False
+    if not _net_up():
+        log("warn", "internet unreachable from this box - keeping the tunnel, rechecking soon")
+        return False
+    return True
+
+
+_rotations = []
+
+
+def _flapping(now):
+    """True once 3+ rotations happened inside 15 minutes - the ring is churning, which
+    means the network itself is the problem and more rotations will not help."""
+    _rotations[:] = [t for t in _rotations if now - t < 900]
+    return len(_rotations) >= 3
+
+
 def _tunnel_watchdog():
     """Two failed reachability checks, or a dead tunnel process, advances to the next
-    transport in the ring. A fresh tunnel gets its first check fast (20s), steady state
-    is once a minute. The new URL is logged; the badge picks it up via /api/config."""
+    transport in the ring - but only after a confirm recheck proves the tunnel itself
+    is down (not the box's internet), and never more than 3 rotations in 15 minutes.
+    A fresh tunnel gets its first check fast (20s), steady state is once a minute.
+    The new URL is logged; the badge picks it up via /api/config."""
     fails, seen = 0, ""
     while True:
         time.sleep(20 if STATE["public_base"] and STATE["public_base"] != seen else 60)
@@ -269,17 +304,25 @@ def _tunnel_watchdog():
                 if _tunnel_reachable():
                     fails = 0
                     (ROOT / ".tunnel_kind").write_text(STATE["tunnel_kind"], encoding="utf-8")
-                else:
-                    fails += 1
-                if fails < 2:
+                    continue
+                fails += 1
+                if fails < 2 or not _tunnel_truly_down():
                     continue
                 log("err", "tunnel unreachable from outside - trying the next transport. "
                            "The public URL changes: re-upload any file already queued.")
             elif STATE["tunnel"] == "down" and any(_tunnel_cmd(k) for k in TUNNEL_KINDS):
+                if not _net_up():
+                    log("sys", "internet unreachable - retrying the tunnel when the network is back")
+                    continue
                 log("sys", "tunnel process died - trying the next transport...")
             else:
                 continue
             fails = 0
+            _rotations.append(time.time())
+            if _flapping(_rotations[-1]):
+                log("err", "3 tunnel rotations in 15 minutes - the network is flapping. "
+                           "Cooling down for 5 minutes before the next attempt.")
+                time.sleep(300)
             STATE["tunnel"] = "down"
             STATE["public_base"] = ""
             if _tunnel_proc and _tunnel_proc.poll() is None:
