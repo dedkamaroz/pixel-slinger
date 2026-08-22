@@ -76,6 +76,13 @@ def test_tunnel_regex():
     # the localhost.run banner carries its own doc links - none of them may parse as the tunnel
     assert server.TUNNEL_RE.search("see https://localhost.run/docs/ or https://admin.localhost.run") is None
     assert server.TUNNEL_RE.search("no url here") is None
+    # pinggy announces two urls, and prints its dashboard link first - taking that one would
+    # hand every provider a login page instead of the file.
+    line = "https://zuxgb-146-70-200-18.free.pinggy.net"
+    assert server.TUNNEL_RE.search(line).group(0) == line
+    line = "https://kwwov-146-70-200-18.run.pinggy-free.link"
+    assert server.TUNNEL_RE.search(line).group(0) == line
+    assert server.TUNNEL_RE.search("Upgrade to Pro: https://dashboard.pinggy.io") is None
 
 
 def test_tunnel_truly_down():
@@ -99,15 +106,55 @@ def test_tunnel_truly_down():
 
 
 def test_flap_guard():
+    """One full lap of the ring is the ring working - on a network where only the last
+    transport passes, every earlier one has to fail first. Only a second lap is flapping."""
+    n = len(server.TUNNEL_KINDS)
     server._rotations.clear()
     base = time.time()
-    server._rotations[:] = [base - 100, base - 50]
-    assert not server._flapping(base)                 # 2 in the window: still fine
+    server._rotations[:] = [base - 100 + i for i in range(n)]
+    assert not server._flapping(base)                 # exactly one lap: still working
     server._rotations.append(base)
-    assert server._flapping(base)                     # 3rd inside 15 min: flapping
-    server._rotations[:] = [base - 901, base - 50, base]
-    assert not server._flapping(base)                 # the oldest aged out
+    assert server._flapping(base)                     # into a second lap: flapping
+    server._rotations[:] = [base - 901] * n + [base]  # the old lap aged out of the window
+    assert not server._flapping(base)
     server._rotations.clear()
+
+
+def test_tunnel_ring_transports():
+    """The ring is only worth having if its entries leave the box on different ports - that
+    is what a network blocks. Ports here are the ones measured on 22/08/2026, not documented:
+    cloudflared rides 7844 on both protocols, so pinggy on 443 is the only ordinary-port way
+    out and has to stay in the ring."""
+    assert server.TUNNEL_KINDS == ("cloudflared", "cloudflared-h2", "localhost.run", "pinggy")
+    cmds = {k: server._tunnel_cmd(k) for k in server.TUNNEL_KINDS}
+    for kind, cmd in cmds.items():
+        if cmd is None:
+            continue                                   # transport not installed on this box
+        assert str(server.PORT) in " ".join(cmd), kind
+    if cmds["cloudflared"] and cmds["cloudflared-h2"]:
+        assert "--protocol" not in cmds["cloudflared"]
+        assert cmds["cloudflared-h2"][-2:] == ["--protocol", "http2"]
+    if cmds["pinggy"] and cmds["localhost.run"]:
+        assert cmds["pinggy"][cmds["pinggy"].index("-p") + 1] == "443"
+        assert "-p" not in cmds["localhost.run"]       # ssh's default, port 22
+        assert cmds["pinggy"][-1] == "a.pinggy.io"
+
+
+def test_enhancor_switch():
+    """Off by default, and the page as served is what decides - the file on disk always
+    reads false so the offline tests can eval it without a server."""
+    on_disk = (server.ROOT / "index.html").read_text(encoding="utf-8")
+    assert server.ENHANCOR_FLAG + "false;" in on_disk, "the page must ship with the switch off"
+    orig = server.ENHANCOR_ON
+    try:
+        server.ENHANCOR_ON = False
+        assert server.ENHANCOR_FLAG + "false;" in server.page_html().decode()
+        server.ENHANCOR_ON = True
+        served = server.page_html().decode()
+        assert server.ENHANCOR_FLAG + "true;" in served
+        assert server.ENHANCOR_FLAG + "false;" not in served
+    finally:
+        server.ENHANCOR_ON = orig
 
 
 def test_http_roundtrip():

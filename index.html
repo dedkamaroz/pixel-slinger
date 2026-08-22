@@ -818,7 +818,8 @@ const arkVideos = {
 // validator won.
 
 const KL_DUR = ["3","4","5","6","7","8","9","10","11","12","13","14","15"];
-const KL_SETTINGS = ["multi_shot","audio","resolution","aspect_ratio","duration","character_orientation"];
+// audio is absent on purpose: no tab offers it, klingShape pins it off for every model.
+const KL_SETTINGS = ["multi_shot","resolution","aspect_ratio","duration","character_orientation"];
 // Motion control is a second endpoint on the same model rather than a model of its own, so
 // it rides as a mode on the 3.0 and 2.6 tabs and swaps the path out from under them.
 const isMC  = s => s.mode === "motion-control";
@@ -826,10 +827,9 @@ const notMC = s => s.mode !== "motion-control";
 const KL_MODE = ["mode","select","Mode",{opts:["image-to-video","motion-control"],
   def:"image-to-video", rerender:true,
   hint:"motion control drives a still portrait with the movement of a reference video"}];
-// The tail every Kling tab ends with. watermark_info is always sent - their default is
-// already false, so this is only ever a request for the extra watermarked copy.
+// The tail every Kling tab ends with. Neither audio nor the watermark has a control any
+// more: both are pinned in klingShape, silent and unwatermarked, on every model.
 const KL_OPTS = [
-  ["watermark","bool","Watermark",{def:false,hint:"asks for a watermarked copy alongside the clean one"}],
   ["external_task_id","text","External task ID",{def:"",
     hint:"optional - your own id for this job; must be unique across the account"}],
 ];
@@ -856,7 +856,10 @@ const klingShape = b => {
   (b.elements || []).forEach(e => c.push(Object.assign({ type:"element" }, e)));
   (b.voices   || []).forEach(v => c.push(Object.assign({ type:"voice"   }, v)));
 
-  const settings = {}, options = { watermark_info: { enabled: !!b.watermark } };
+  // Audio off and no watermark, on every model, with no way to ask for either from the
+  // form. Both platform defaults go the other way - a generated soundtrack on the models
+  // that support one, and a watermarked copy - so both have to be sent, not just omitted.
+  const settings = { audio: "off" }, options = { watermark_info: { enabled: false } };
   KL_SETTINGS.forEach(k => { if (b[k] !== undefined && b[k] !== "") settings[k] = b[k]; });
   // duration is an int on these routes - a string only on 2.1 Master's legacy one - and a
   // select hands back a string either way, so it is normalised here rather than on each
@@ -865,7 +868,7 @@ const klingShape = b => {
   if (b.external_task_id) options.external_task_id = b.external_task_id;
   Object.keys(b).forEach(k => delete b[k]);
   b.contents = c;
-  if (Object.keys(settings).length) b.settings = settings;
+  b.settings = settings;   // never empty now: audio: "off" is always in it
   b.options = options;
 };
 
@@ -896,10 +899,6 @@ const klingVideos = {
         hint:KL_ELEM_HINT + ". Max 3, or 1 in motion control"}],
       ["multi_shot","bool","Multi-shot",{def:true,when:notMC,
         hint:"off renders a multi-shot prompt as a single shot"}],
-      ["audio","select","Audio",{
-        optsBy: s => isMC(s) ? ["original","off"] : ["native","off"],
-        by: s => isMC(s) ? {def:"original"} : {def:"off"},
-        hint:"native is a generated soundtrack, original keeps the motion video's own sound"}],
       ["resolution","select","Resolution",{def:"720p",
         optsBy: s => isMC(s) ? ["720p","1080p"] : ["720p","1080p","4k"]}],
       ["duration","select","Duration (s)",{opts:KL_DUR,def:"10",when:notMC,
@@ -922,15 +921,12 @@ const klingVideos = {
         hint:"@image_1, @image_2... - scene, style or subject references. Reference images plus "
            + "multi-image elements: max 7, or max 4 once a reference video is in play"}],
       ["feature_video","file","Feature video",{
-        hint:"optional - motion/style reference. mp4/mov, max 200 MB, 3-15.5s, 700-4553px a side. "
-           + "Rules out native audio"}],
+        hint:"optional - motion/style reference. mp4/mov, max 200 MB, 3-15.5s, 700-4553px a side"}],
       ["base_video","file","Base video",{
-        hint:"optional - the clip to edit. Rules out first/last frame, multi-shot and native audio"}],
+        hint:"optional - the clip to edit. Rules out first/last frame and multi-shot"}],
       ["elements","json","Elements",{def:"",rows:3,
         hint:KL_ELEM_HINT + ". Video-character and multi-image elements have different caps - see their guide"}],
       ["multi_shot","bool","Multi-shot",{def:true,hint:"off renders a multi-shot prompt as a single shot"}],
-      ["audio","select","Audio",{opts:["off","native","original"],def:"off",
-        hint:"native is a generated soundtrack, original keeps the reference video's sound"}],
       ["resolution","select","Resolution",{opts:["720p","1080p","4k"],def:"720p"}],
       ["aspect_ratio","select","Aspect ratio",{opts:["16:9","9:16","1:1"],def:"9:16",
         hint:"required when there is no first frame and no reference video - otherwise those set the framing"}],
@@ -955,8 +951,6 @@ const klingVideos = {
       ["base_video","file","Base video",{hint:"optional - the clip to edit. Rules out first and last frame"}],
       ["elements","json","Elements",{def:"",rows:3,
         hint:KL_ELEM_HINT + ". O1 takes multi-image elements only - video-character elements are not supported yet"}],
-      ["audio","select","Audio",{opts:["off","original"],def:"off",
-        hint:"original keeps the reference video's sound. O1 generates no native soundtrack"}],
       ["resolution","select","Resolution",{opts:["720p","1080p"],def:"720p"}],
       ["aspect_ratio","select","Aspect ratio",{opts:["16:9","9:16","1:1"],def:"9:16",
         hint:"required when there is no first frame and no reference video"}],
@@ -985,14 +979,10 @@ const klingVideos = {
       ["character_orientation","select","Character orientation",{opts:["video","image"],def:"video",when:isMC,
         hint:"required - which input the facing follows. image caps the motion video at 10s, video allows 30s"}],
       ["voices","json","Voices",{when:notMC,def:"",rows:3,
-        hint:'optional [{"voice_id":"...","id":"sweet"}] - max 2, from Kling’s voice API or their '
-           + 'presets. Needs audio set to native, and @sweet in the prompt picks it'}],
-      ["audio","select","Audio",{
-        optsBy: s => isMC(s) ? ["original","off"] : ["native","off"],
-        by: s => isMC(s) ? {def:"original"} : {def:"off"},
-        hint:"native is a generated soundtrack and forces 1080p; original keeps the motion video's sound"}],
+        hint:'INERT while audio is pinned off - voices only speak over a native soundtrack. '
+           + 'Kept for when audio comes back: [{"voice_id":"...","id":"sweet"}], max 2, @sweet in the prompt'}],
       ["resolution","select","Resolution",{opts:["720p","1080p"],def:"720p",
-        hint:"native audio and first-plus-last-frame both force 1080p"}],
+        hint:"first-plus-last-frame forces 1080p"}],
       ["duration","select","Duration (s)",{opts:["5","10"],def:"10",when:notMC,
         hint:"motion control has no duration - the output follows the reference video"}],
       ...KL_OPTS,
@@ -1007,9 +997,6 @@ const klingVideos = {
         hint:"required - jpg/png, max 50 MB, at least 300px a side, aspect 1:2.5 to 2.5:1"}],
       ["last_frame","file","Last frame",{
         hint:"optional - needs a first frame, and forces 1080p"}],
-      ["audio","select","Audio",{opts:["native","off"],def:"off",
-        hint:"native is a generated soundtrack - the platform default, so this tab sends off "
-           + "unless native is picked"}],
       ["resolution","select","Resolution",{opts:["720p","1080p"],def:"720p",
         hint:"first-plus-last-frame runs at 1080p only"}],
       ["duration","select","Duration (s)",{opts:["5","10"],def:"10"}],
@@ -1025,8 +1012,13 @@ const klingVideos = {
     kling: "/v1/videos/image2video", abbr: "k21m",
     shape: b => {
       b.model_name = "kling-v2-1-master";
-      b.watermark_info = { enabled: !!b.watermark };
+      // Pinned off with no control, same as the new routes. This is the flat route, so
+      // whatever sits on the body reaches the wire - anything the form no longer offers has
+      // to be cleared here, not merely left unset. The model generates no soundtrack at all,
+      // so audio is dropped rather than sent off.
       delete b.watermark;
+      delete b.audio;
+      b.watermark_info = { enabled: false };
     },
     fields: [
       ["image","file","Source image",{
@@ -1039,7 +1031,6 @@ const klingVideos = {
         hint:"std outputs 720p, pro outputs 1080p. This model has no 4k mode"}],
       // A string enum on this route, not an integer - a number here comes back rejected.
       ["duration","select","Duration (s)",{opts:["5","10"],def:"10",hint:"5 or 10 only on this model"}],
-      ["watermark","bool","Watermark",{def:false,hint:"asks for a watermarked copy alongside the clean one"}],
       ["external_task_id","text","External task ID",{def:"",
         hint:"optional - your own id for this job; must be unique across the account"}],
     ]

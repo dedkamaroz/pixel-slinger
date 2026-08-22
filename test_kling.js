@@ -51,14 +51,14 @@ const partsOf = b => b.contents.map(p => p.type);
 let b = shape(SERVICES.k30, {
   prompt: "a woman turns to camera",
   first_frame: "https://x/a.jpg", last_frame: "https://x/b.jpg",
-  multi_shot: true, audio: "native", resolution: "1080p", duration: 8,
-  watermark: false, external_task_id: "job-1",
+  multi_shot: true, resolution: "1080p", duration: 8,
+  external_task_id: "job-1",
 });
 assert.deepStrictEqual(partsOf(b), ["prompt", "first_frame", "last_frame"]);
 assert.deepStrictEqual(b.contents[0], { type: "prompt", text: "a woman turns to camera" });
 assert.deepStrictEqual(b.contents[1], { type: "first_frame", url: "https://x/a.jpg" });
 assert.deepStrictEqual(b.settings,
-  { multi_shot: true, audio: "native", resolution: "1080p", duration: 8 });
+  { audio: "off", multi_shot: true, resolution: "1080p", duration: 8 });
 // A select hands back a string; these routes document duration as an int, so the shape
 // has to normalise it rather than send "8".
 assert.strictEqual(shape(SERVICES.k30, { duration: "12" }).settings.duration, 12);
@@ -84,32 +84,44 @@ assert.deepStrictEqual(b.contents.find(p => p.type === "element"),
 
 // 2.6's voices ride in contents as well, not in settings.
 b = shape(SERVICES.k26, { prompt: "she says hello", first_frame: "https://x/a.jpg",
-  voices: [{ voice_id: "v1", id: "sweet" }], audio: "native" });
+  voices: [{ voice_id: "v1", id: "sweet" }] });
 assert.deepStrictEqual(b.contents.find(p => p.type === "voice"),
   { type: "voice", voice_id: "v1", id: "sweet" });
 
 // An empty form must not invent parts or an empty settings block.
 b = shape(SERVICES.k25t, {});
 assert.deepStrictEqual(b.contents, []);
-assert.strictEqual(b.settings, undefined, "no settings block when nothing is set");
+assert.deepStrictEqual(b.settings, { audio: "off" }, "an empty form still pins audio off");
 assert.deepStrictEqual(b.options, { watermark_info: { enabled: false } });
 
-// 2.5 Turbo takes the same settings.audio switch as 3.0 and 2.6. The platform default
-// is a generated soundtrack, so the tab must offer the switch and send "off" verbatim.
-assert(shown(SERVICES.k25t, {}).includes("audio"), "2.5 Turbo must offer the audio switch");
-b = shape(SERVICES.k25t, { first_frame: "https://x/a.jpg", audio: "off", duration: "10" });
-assert.strictEqual(b.settings.audio, "off");
+b = shape(SERVICES.k25t, { first_frame: "https://x/a.jpg", duration: "10" });
 assert.strictEqual(b.settings.duration, 10);
+
+// --- silent and unwatermarked, on every model, with no control for either ------
+// Both platform defaults go the other way: a generated soundtrack on the models that have
+// one, and a watermarked copy. So neither can be left out of the body - and neither may
+// come back as a form field, because a control here is a control someone eventually flips.
+KLING_MODELS.forEach(id => {
+  const names = SERVICES[id].fields.map(f => f[0]);
+  assert(!names.includes("audio"), `${id} must not offer an audio control`);
+  assert(!names.includes("watermark"), `${id} must not offer a watermark control`);
+  // A body that tried to ask for either must not reach the wire with it.
+  const out = shape(SERVICES[id], { audio: "native", watermark: true });
+  assert.strictEqual(out.audio, undefined, `${id} must not pass audio through at the top level`);
+  assert.strictEqual(out.watermark, undefined, `${id} must not pass watermark through`);
+  const wm = id === "k21m" ? out.watermark_info : out.options.watermark_info;
+  assert.deepStrictEqual(wm, { enabled: false }, `${id} must send watermark_info off`);
+  if (id !== "k21m") assert.strictEqual(out.settings.audio, "off", `${id} must send audio off`);
+});
 
 // --- 2.1 Master keeps the legacy flat body -----------------------------------
 // It is the odd one out: no contents envelope, and the model rides in model_name.
 b = shape(SERVICES.k21m, { image: "https://x/a.jpg", prompt: "p", cfg_scale: 0.5,
-  mode: "pro", duration: "5", watermark: true });
+  mode: "pro", duration: "5" });
 assert.strictEqual(b.model_name, "kling-v2-1-master");
 assert.strictEqual(b.contents, undefined, "the legacy route takes a flat body");
 assert.strictEqual(b.image, "https://x/a.jpg");
-assert.deepStrictEqual(b.watermark_info, { enabled: true });
-assert.strictEqual(b.watermark, undefined, "the form's bool must not reach the wire as-is");
+assert.deepStrictEqual(b.watermark_info, { enabled: false });
 // duration is a string enum on this route - a number comes back rejected.
 SERVICES.k21m.fields.filter(f => f[0] === "duration").forEach(([, , , o]) =>
   assert(!o.num, "2.1 Master's duration must stay a string"));
@@ -133,7 +145,7 @@ assert(!shown(SERVICES.k26, { mode: "motion-control" }).includes("voices"),
 
 // --- enums line up with their defaults ---------------------------------------
 // A select whose default is not one of its own options renders blank, and the blank is
-// what gets sent. The audio and resolution lists move with the mode, so check both modes.
+// what gets sent. Some lists move with the mode, so check both modes.
 KLING_MODELS.forEach(id => {
   const svc = SERVICES[id];
   [{}, { mode: "motion-control" }].forEach(state => {
