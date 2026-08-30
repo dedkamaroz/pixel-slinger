@@ -7,3 +7,4 @@ server.log
 .tunnel_kind
 tasks/
 d.html
+cloudflared.exe

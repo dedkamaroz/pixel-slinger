@@ -25,6 +25,8 @@ matches neither.
 
 ## Start / stop
 
+**First run:** double-click `setup.bat` once (see [Setup](#setup)).
+
 **Start:** double-click `start.bat`. A console window opens, the tunnel comes up after a few
 seconds, and the browser opens on http://127.0.0.1:8787. Python 3.10+, no pip install.
 
@@ -45,6 +47,16 @@ Get-Process cloudflared, ssh -EA SilentlyContinue     # should return nothing
 
 ## Setup
 
+**The short version:** download the repo (green **Code** button on GitHub -> **Download ZIP**, then
+right-click the zip -> Extract All; or `git clone` if you have git), double-click **`setup.bat`**,
+then double-click **`start.bat`**. `setup.bat` installs Python if it is missing, downloads
+`cloudflared` next to the other files, and opens `.env` in Notepad for your keys. It is safe to run
+again any time - it skips whatever is already done.
+
+You still have to bring your own API keys; there is nothing to sign into in the app itself.
+
+The long version, if you would rather do it by hand:
+
 1. Put your keys in `.env`:
    ```
    KLINGAI_API_KEY=api-key-kling-...
@@ -57,7 +69,9 @@ Get-Process cloudflared, ssh -EA SilentlyContinue     # should return nothing
    the others still work. A call to a provider whose key is absent is refused before it leaves
    the machine rather than being sent with the wrong credential.
 
-2. Install cloudflared so the providers' servers can fetch your dropped files:
+2. Install cloudflared so the providers' servers can fetch your dropped files. `setup.bat`
+   drops `cloudflared.exe` in this folder, which needs no admin and no package manager; the
+   installed alternatives are:
    ```
    scoop install cloudflared          # no admin needed - this is what's installed here
    choco install cloudflared          # alternative, needs an elevated shell
