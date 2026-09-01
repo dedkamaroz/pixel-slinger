@@ -67,6 +67,16 @@ def test_provider_routing():
     assert server.key_var(kl) == "KLINGAI_API_KEY"
     assert server.key_var("https://apireq.enhancor.ai/api/x") == "ENHANCOR_API_KEY"
 
+    # QwenCloud: a third Bearer key, again told apart by exact hostname only.
+    qw = "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis"
+    assert server.is_qwen(qw)
+    assert not server.is_kling(qw) and not server.is_ark(qw) and not server.is_fal(qw)
+    assert not server.is_qwen("https://dashscope.aliyuncs.com/api/v1/tasks/x")
+    assert not server.is_qwen("https://dashscope-intl.aliyuncs.com.evil.example/x")
+    headers, _, secret = server.auth_for(qw)
+    assert secret == "Authorization" and headers["Authorization"].startswith("Bearer ")
+    assert server.key_var(qw) == "QWENCLOUD_API_KEY"
+
 
 def test_tunnel_regex():
     line = "2026-08-05 INF |  https://calm-blue-fox-42.trycloudflare.com   |"

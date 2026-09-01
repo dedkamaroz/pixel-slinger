@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Pixel Slinger - local console + proxy for the Enhancor, fal.ai, BytePlus and Kling APIs.
+"""Pixel Slinger - local console + proxy for the Enhancor, fal.ai, BytePlus, Kling and
+QwenCloud APIs.
 
 Stdlib only. Serves the UI, hosts drag-dropped files so the providers' servers
 can fetch them (via a cloudflared quick tunnel), proxies every API call so the
 keys never reach the browser, and streams a full request/response log to the page.
 
-Four providers, four auth schemes, picked per request by hostname:
+Five providers, five auth schemes, picked per request by hostname:
   Enhancor  apireq.enhancor.ai                x-api-key:     ENHANCOR_API_KEY
   fal.ai    queue.fal.run                     Authorization: Key FAL_KEY
   BytePlus  ark.ap-southeast.bytepluses.com   Authorization: Bearer BYTEPLUS_API_KEY
@@ -13,6 +14,9 @@ Four providers, four auth schemes, picked per request by hostname:
   Kling AI  api-singapore.klingai.com         Authorization: Bearer KLINGAI_API_KEY
             (their open platform takes the api-key-kling-... string as a plain bearer
              token - there is no JWT to sign and no AccessKey/SecretKey pair to hold)
+  QwenCloud dashscope-intl.aliyuncs.com       Authorization: Bearer QWENCLOUD_API_KEY
+            (qwencloud.com is the international face of Alibaba's Model Studio - an
+             sk-ws-... key from there answers on the DashScope-native /api/v1 routes)
 """
 import atexit
 import base64
@@ -97,6 +101,10 @@ def kling_key():
     return load_env().get("KLINGAI_API_KEY", "").strip()
 
 
+def qwen_key():
+    return load_env().get("QWENCLOUD_API_KEY", "").strip()
+
+
 # fal's queue also answers on fal.run for the sync path; both take the same header.
 FAL_HOSTS = ("queue.fal.run", "fal.run")
 
@@ -106,6 +114,10 @@ ENHANCOR_HOST = "apireq.enhancor.ai"
 # api.klingai.com answers too, but this account was issued in Singapore and task ids are
 # regional - a task created on one host is not visible from the other.
 KLING_HOST = "api-singapore.klingai.com"
+# QwenCloud's own model pages name this host. The workspace-scoped
+# {id}.ap-southeast-1.maas.aliyuncs.com hosts in Alibaba's docs are the Model Studio
+# console's keys, not the sk-ws- ones qwencloud.com issues.
+QWEN_HOST = "dashscope-intl.aliyuncs.com"
 
 
 def _host(url):
@@ -128,9 +140,14 @@ def is_kling(url):
     return _host(url) == KLING_HOST
 
 
+def is_qwen(url):
+    return _host(url) == QWEN_HOST
+
+
 def key_var(url):
     return ("FAL_KEY" if is_fal(url) else "BYTEPLUS_API_KEY" if is_ark(url)
-            else "KLINGAI_API_KEY" if is_kling(url) else "ENHANCOR_API_KEY")
+            else "KLINGAI_API_KEY" if is_kling(url) else "QWENCLOUD_API_KEY" if is_qwen(url)
+            else "ENHANCOR_API_KEY")
 
 
 def auth_for(url):
@@ -143,6 +160,9 @@ def auth_for(url):
         return {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}, key, "Authorization"
     if is_kling(url):
         key = kling_key()
+        return {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}, key, "Authorization"
+    if is_qwen(url):
+        key = qwen_key()
         return {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}, key, "Authorization"
     key = api_key()
     return {"Content-Type": "application/json", "x-api-key": key}, key, "x-api-key"
@@ -592,7 +612,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, page_html(), "text/html; charset=utf-8")
 
         if path == "/api/config":
-            key, fkey, akey, kkey = api_key(), fal_key(), ark_key(), kling_key()
+            key, fkey, akey, kkey, qkey = api_key(), fal_key(), ark_key(), kling_key(), qwen_key()
             hint = lambda k: (k[:4] + "..." + k[-4:]) if len(k) > 8 else ""
             return self._json(200, {
                 "hasKey": bool(key),
@@ -603,6 +623,8 @@ class Handler(BaseHTTPRequestHandler):
                 "arkKeyHint": hint(akey),
                 "hasKlingKey": bool(kkey),
                 "klingKeyHint": hint(kkey),
+                "hasQwenKey": bool(qkey),
+                "qwenKeyHint": hint(qkey),
                 # Read per request, so editing .env shows up in the drop-downs on the
                 # next poll without restarting the server.
                 "postgenVideo": [{"key": x["key"], "label": x["label"]}
@@ -762,9 +784,10 @@ class Handler(BaseHTTPRequestHandler):
         res["webhookToken"] = token
         j = res.get("json")
         # Enhancor returns requestId, fal returns request_id, BytePlus returns id. Kling
-        # wraps the task in data{} - and its top-level request_id names the HTTP call, not
-        # the job, so the nested id has to win or history records the wrong thing.
-        d = j.get("data") if isinstance(j, dict) else None
+        # wraps the task in data{} and QwenCloud in output{} - and both top-level
+        # request_ids name the HTTP call, not the job, so the nested id has to win or
+        # history records the wrong thing.
+        d = (j.get("data") or j.get("output")) if isinstance(j, dict) else None
         rid = (d.get("id") or d.get("task_id")) if isinstance(d, dict) else None
         rid = rid or ((j.get("requestId") or j.get("request_id") or j.get("id"))
                       if isinstance(j, dict) else None)
@@ -871,7 +894,7 @@ def main():
     OUTPUTS.mkdir(exist_ok=True)
     if not (ROOT / ".env").exists():
         (ROOT / ".env").write_text("ENHANCOR_API_KEY=\nFAL_KEY=\nBYTEPLUS_API_KEY=\n"
-            "KLINGAI_API_KEY=\n"
+            "KLINGAI_API_KEY=\nQWENCLOUD_API_KEY=\n"
             "POSTVIDGEN_1=\nPOSTVIDGEN_2=\nPOSTVIDGEN_3=\nPOSTIMGGEN_1=\n", encoding="utf-8")
     try:
         srv = Server(("127.0.0.1", PORT), Handler)
@@ -884,7 +907,8 @@ def main():
     print(f"  enhancor key: {'set' if api_key() else 'MISSING - add ENHANCOR_API_KEY to .env'}")
     print(f"  fal key:      {'set' if fal_key() else 'MISSING - add FAL_KEY to .env'}")
     print(f"  byteplus key: {'set' if ark_key() else 'MISSING - add BYTEPLUS_API_KEY to .env'}")
-    print(f"  kling key:    {'set' if kling_key() else 'MISSING - add KLINGAI_API_KEY to .env'}\n")
+    print(f"  kling key:    {'set' if kling_key() else 'MISSING - add KLINGAI_API_KEY to .env'}")
+    print(f"  qwen key:     {'set' if qwen_key() else 'MISSING - add QWENCLOUD_API_KEY to .env'}\n")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

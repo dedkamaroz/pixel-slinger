@@ -47,16 +47,16 @@ echo   [x] cloudflared
 
 rem --- 3. keys --------------------------------------------------------------------
 if not exist .env copy /y .env.example .env >nul
-findstr /r /c:"^KLINGAI_API_KEY=." /c:"^FAL_KEY=." /c:"^BYTEPLUS_API_KEY=." .env >nul 2>&1 && goto :haveKeys
+findstr /r /c:"^KLINGAI_API_KEY=." /c:"^FAL_KEY=." /c:"^BYTEPLUS_API_KEY=." /c:"^QWENCLOUD_API_KEY=." .env >nul 2>&1 && goto :haveKeys
 echo   [ ] No API keys yet. Notepad is opening .env now - paste your keys after
 echo       the = signs, one per line, then save and close it.
 echo.
-echo       You need at least one of: KLINGAI_API_KEY, FAL_KEY, BYTEPLUS_API_KEY.
+echo       You need at least one of: KLINGAI_API_KEY, FAL_KEY, BYTEPLUS_API_KEY, QWENCLOUD_API_KEY.
 echo       Tabs for a provider with no key just refuse to run; the others work.
 echo.
 pause
 notepad .env
-findstr /r /c:"^KLINGAI_API_KEY=." /c:"^FAL_KEY=." /c:"^BYTEPLUS_API_KEY=." .env >nul 2>&1 || (
+findstr /r /c:"^KLINGAI_API_KEY=." /c:"^FAL_KEY=." /c:"^BYTEPLUS_API_KEY=." /c:"^QWENCLOUD_API_KEY=." .env >nul 2>&1 || (
   echo.
   echo   Still no keys in .env - nothing will run until there is at least one.
   echo   Run setup.bat again when you have them.

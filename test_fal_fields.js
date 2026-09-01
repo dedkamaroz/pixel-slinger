@@ -84,6 +84,18 @@ assert(!("canvas_size" in b), "half a pair must never serialise as [n,null]");
 assert.deepStrictEqual(br.results({ image: { url: "z" }, seed: 1 }), ["z"]);
 assert.deepStrictEqual(br.results({}), []);
 
+// fit() fills the placement fields off the measured source: real size, centred, when it
+// fits the canvas; a source that overflows doubles the canvas (1080x1920->2160x3840) and
+// goes in at half-size, centred.
+b = { canvas_w: 1080, canvas_h: 1920 };
+br.fit(b, 500, 1000);
+assert.deepStrictEqual([b.orig_w, b.orig_h, b.orig_x, b.orig_y], [500, 1000, 290, 460],
+  "fits: real size, centred");
+assert.strictEqual(b.canvas_w, 1080, "a fitting source leaves the canvas alone");
+br.fit(b, 3000, 3000);
+assert.deepStrictEqual([b.canvas_w, b.canvas_h, b.orig_w, b.orig_h, b.orig_x, b.orig_y],
+  [2160, 3840, 1080, 1920, 540, 960], "overflow: doubled canvas, half-size, centred");
+
 // --- Seedance 1.5 Pro i2v / Kling 2.6 Pro i2v --------------------------------
 // No shape() on either - they are flat. What can break instead is the duration field:
 // fal types it as a string enum on both, so a "number" field would send 5 and 422.
@@ -139,10 +151,11 @@ assert.strictEqual(k26.fal, "fal-ai/kling-video/v2.6/pro/image-to-video");
 // --- transport separation ----------------------------------------------------
 // A fal tab carrying `base` would queue the fal body against Enhancor with the wrong key.
 [sd, br].forEach(s => assert(!s.base, `${s.title} must not define base`));
-// Four transports now, still exactly one each: fal, Enhancor (base), BytePlus (ark), Kling.
+// Five transports now, still exactly one each: fal, Enhancor (base), BytePlus (ark), Kling,
+// QwenCloud (qwen / qwenImage).
 Object.entries(SERVICES).forEach(([id, s]) =>
-  assert([s.fal, s.base, s.ark, s.arkImage, s.kling].filter(Boolean).length === 1,
-    `${id} must have exactly one of fal/base/ark/arkImage/kling`));
+  assert([s.fal, s.base, s.ark, s.arkImage, s.kling, s.qwen, s.qwenImage].filter(Boolean).length === 1,
+    `${id} must have exactly one of fal/base/ark/arkImage/kling/qwen/qwenImage`));
 
 // --- nav wiring --------------------------------------------------------------
 // A nav id with no matching service latches the switch and renders an empty pane - no

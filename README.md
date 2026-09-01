@@ -1,11 +1,11 @@
 # Pixel Slinger
 
-Local web console for image and video generation across three live providers - **Kling AI**
-(`api-singapore.klingai.com`), **BytePlus ModelArk** (`ark.ap-southeast.bytepluses.com`) and
-**fal.ai** (`queue.fal.run`). Drag-and-drop file input, every request and response streamed to an
+Local web console for image and video generation across four live providers - **Kling AI**
+(`api-singapore.klingai.com`), **BytePlus ModelArk** (`ark.ap-southeast.bytepluses.com`),
+**fal.ai** (`queue.fal.run`) and **QwenCloud** (`dashscope-intl.aliyuncs.com`). Drag-and-drop file input, every request and response streamed to an
 on-page terminal, results saved to disk the moment they land.
 
-A fourth provider, **Enhancor** (`apireq.enhancor.ai`), is built and working but switched off.
+A fifth provider, **Enhancor** (`apireq.enhancor.ai`), is built and working but switched off.
 Its tabs, field gating and webhook plumbing are all still in the code; `set ENHANCOR=1` in
 `start.bat` puts them back in the nav. There is deliberately no control for it in the page.
 
@@ -17,11 +17,12 @@ so one provider's body can never go out signed with another's key.
 | Kling AI | `api-singapore.klingai.com` | `Authorization: Bearer KLINGAI_API_KEY` | POST `/<capability>/<model>` (2.1 Master: POST `/v1/videos/image2video`), GET `/tasks?task_ids=` |
 | BytePlus | `ark.ap-southeast.bytepluses.com` | `Authorization: Bearer BYTEPLUS_API_KEY` | video: POST `/contents/generations/tasks`, GET `.../{id}`; image: POST `/images/generations`, synchronous |
 | fal.ai | `queue.fal.run` | `Authorization: Key FAL_KEY` | POST endpoint id, GET `status_url` then GET `response_url` |
+| QwenCloud | `dashscope-intl.aliyuncs.com` | `Authorization: Bearer QWENCLOUD_API_KEY` | video: POST `/api/v1/services/aigc/video-generation/video-synthesis` (`X-DashScope-Async: enable`), GET `/api/v1/tasks/{id}`; image: POST `/api/v1/services/aigc/multimodal-generation/generation`, synchronous |
 | Enhancor (off) | `apireq.enhancor.ai` | `x-api-key: ENHANCOR_API_KEY` | POST `/queue`, webhook + POST `/status` polling |
 
-Two of the four sign with `Bearer`, so the hostname is the only thing keeping the BytePlus key and
-the Kling key apart. `is_ark` / `is_kling` compare the parsed hostname exactly - a lookalike host
-matches neither.
+Three of the five sign with `Bearer`, so the hostname is the only thing keeping the BytePlus,
+Kling and QwenCloud keys apart. `is_ark` / `is_kling` / `is_qwen` compare the parsed hostname
+exactly - a lookalike host matches none of them.
 
 ## Start / stop
 
@@ -60,6 +61,7 @@ The long version, if you would rather do it by hand:
 1. Put your keys in `.env`:
    ```
    KLINGAI_API_KEY=api-key-kling-...
+   QWENCLOUD_API_KEY=sk-ws-...
    BYTEPLUS_API_KEY=your_byteplus_key_here
    FAL_KEY=your_fal_key_here
    ENHANCOR_API_KEY=only_needed_with_ENHANCOR=1
@@ -167,14 +169,16 @@ models inside; picking one latches that switch and loads its form.
 
 | Tab | Provider | Endpoint |
 |---|---|---|
+| QwenCloud Qwen-Image | QwenCloud | publisher page: `qwen-image-3.0-pro` on `/multimodal-generation/generation` - text to image, or edit with 1-3 reference images, 1-6 outputs, synchronous |
 | Dola-Seedream-5.0-pro | BytePlus | `/images/generations`, model `dola-seedream-5-0-pro-260628` - up to 10 reference images, synchronous |
 | Seedream 5 Pro Edit | fal.ai | `bytedance/seedream/v5/pro/edit` - up to 10 reference images, 1-6 outputs |
 | Bria Expand | fal.ai | `fal-ai/bria/expand` - outpaint onto a larger canvas |
 
-**Video Generators** - three publisher pages, each with its own model drop-down.
+**Video Generators** - four publisher pages, each with its own model drop-down.
 
 | Page | Models |
 |---|---|
+| QwenCloud Wan-Video | `wan3.0-video`, `wan3.0-video-prime` (same inputs, faster, double the price) - text, first/last frame, or up to 10 image / 5 video / 5 audio references plus a document or web link, 2-30s or smart duration, 480P-1080P |
 | Kling AI | Kling 3.0 (+ motion control), 3.0 Omni, O1, 2.6 (+ motion control), 2.5 Turbo, 2.1 Master |
 | BytePlus Seedance | `dreamina-seedance-2-5-260628` (480p/720p, to 30s, 30 image / 10 video / 10 audio refs), `dreamina-seedance-2-0-260128` (to 4k, 4-15s), `-2-0-fast-`, `-2-0-mini-`, `seedance-1-5-pro-251215` (first + last frame only) |
 | fal.ai | `fal-ai/bytedance/seedance/v1.5/pro/image-to-video`, `fal-ai/kling-video/v2.6/pro/image-to-video` |
@@ -442,6 +446,62 @@ Notes that cost time if you meet them cold:
 - Model ids carry a release date and are what the API keys on, so each tab shows its id in the
   form heading. If BytePlus rotates one, `arkVideos` / `sd5pro` is the single place to change it.
 
+## QwenCloud
+
+[qwencloud.com](https://www.qwencloud.com) is the international storefront for Alibaba's Model
+Studio. Its `sk-ws-...` keys answer on the DashScope-native routes of
+`https://dashscope-intl.aliyuncs.com/api/v1` - the workspace-scoped
+`{id}.<region>.maas.aliyuncs.com` hosts in Alibaba's own docs belong to keys cut in the Model
+Studio console, not to a QwenCloud one.
+
+**Auth.** `Authorization: Bearer QWENCLOUD_API_KEY`. Two pages, one per output kind, so each
+sits in the nav group whose post-gen script row it needs:
+
+| Page | Model | Flow |
+|---|---|---|
+| QwenCloud Qwen-Image (Image Editors) | `qwen-image-3.0-pro` | POST `/services/aigc/multimodal-generation/generation`, synchronous - the image URLs come back in the same response under `output.choices[].message.content[].image` |
+| QwenCloud Wan-Video (Video Generators) | `wan3.0-video`, `wan3.0-video-prime` | POST `/services/aigc/video-generation/video-synthesis` with `X-DashScope-Async: enable` -> `output.task_id`, then GET `/tasks/{id}` until `task_status` is terminal; `output.video_url` |
+
+Both post the same envelope: `model` at the top, inputs under `input`, every knob under
+`parameters`. `qwenShape` in the page does the split; `test_qwen.js` checks it.
+
+**Qwen-Image-3.0-Pro.** The prompt goes as `input.messages[0].content[0].text` (up to 4,500
+tokens) and reference images as `{image: url}` parts after it, addressed as `Image 1`, `Image 2`,
+`Image 3` in the prompt - any image switches the model from text-to-image into edit. `size` is free-form `width*height` between 512x512 and 2048x2048 of
+area, billed in two tiers (1k / 2k), so the chips offer one size per tier per shape. `agent`
+rewrite mode is text-to-image only and the API 400s rather than ignoring it with an image in
+play, so the page drops it back to `direct` in that case. `enable_thinking` requires
+`prompt_extend`, so it and the rewrite mode fold away when the rewrite is switched off and
+neither reaches the body. `negative_prompt` is in their API
+reference but their model guide lists Qwen-Image as ignoring it - the box stays, as a request.
+
+**Wan3.0-Video.** Either a prompt or at least one media input. Media is a typed list -
+`first_frame`, `last_frame`, `reference_image` (10), `reference_video` (5), `reference_audio`
+(5), `file` (1), `link` (1). Their two hard rules are that the frame types and the reference
+types cannot share a request, and that a document and a link cannot either. The form enforces
+the first with a mode select - text-to-video, frame-to-video, reference-to-video - that gates
+which inputs are offered, the way Kling's image-to-video / motion-control switch does; for the
+second the document wins and the link is dropped. Editing or extending a clip is
+reference-to-video with the clip as `Video 1` and the intent ("edit", "replace", "extend",
+"continue") in the prompt. The prompt addresses references as `Image 1`, `Video 1`, `Audio 1`,
+each type numbered on its own in the order the media list carries them, which is the order the
+form shows them.
+
+Their guide's recommendations are the form's defaults: `ratio` is `adaptive` whenever there is
+an input to adapt to and a fixed ratio for text alone (adaptive is not offered there);
+`duration` is 2-30, or -1 for smart duration, which their guide recommends for edits and
+extensions because those keep the clip's own length; a value already typed survives a mode
+switch, so the -1 is the hint's advice rather than something the form imposes. With a reference video, input plus output must
+stay under 30s. No mode needs a minimum resolution and last frame does not force anything -
+unlike Kling 2.5 / 2.6, where first-plus-last frame runs at 1080p only. `audio` defaults on at
+no extra cost, `watermark` off. `wan3.0-video-prime` is the same model on the same route with
+the same inputs, faster and at twice the per-second price; the drop-down is where the two are
+told apart and the form is shared. Result URLs expire after 24 hours - the page saves on sight.
+
+Fields, enums and limits were read off QwenCloud's own API reference on 02/09/2026 and
+cross-checked against the Alibaba Model Studio page for each model. Neither has been run
+against the live validator yet - the first real job is the check.
+
 ## fal.ai
 
 Field lists were taken from fal's own OpenAPI document rather than the model page, so they are the
@@ -486,7 +546,7 @@ All offline unless noted:
 ```
 python test_server.py          python test_save_naming.py     python test_postprocess.py
 node   test_kling.js           node   test_byteplus.js        node   test_fal_fields.js
-node   test_video_fields.js    node   test_prompt_store.js
+node   test_video_fields.js    node   test_prompt_store.js    node   test_qwen.js
 python test_skin_matrix.py     # live, needs the Enhancor key, costs nothing:
                                # every payload targets an unresolvable image host
 ```

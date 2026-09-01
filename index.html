@@ -333,6 +333,7 @@
   .pub-kling    { --pub-a:#9B6BFF; --pub-b:#FF4FD8; --pub-glow:rgba(155,107,255,.20); }
   .pub-byteplus { --pub-a:#2E7BFF; --pub-b:#25E0D6; --pub-glow:rgba(46,123,255,.18); }
   .pub-fal      { --pub-a:#FFFFFF; --pub-b:#8E99A4; --pub-glow:rgba(255,255,255,.10); }
+  .pub-qwen     { --pub-a:#7B61FF; --pub-b:#FF8A3D; --pub-glow:rgba(123,97,255,.20); }
 
   /* console */
   /* right-hand column, one third of the window - the form is the wide half */
@@ -402,6 +403,7 @@
       <span class="badge" id="b-fal">FAL.AI KEY ?</span>
       <span class="badge" id="b-ark">BYTEPLUS KEY ?</span>
       <span class="badge" id="b-kling">KLING KEY ?</span>
+      <span class="badge" id="b-qwen">QWEN KEY ?</span>
       <span class="badge" id="b-tun">TUNNEL ?</span>
     </span>
   </div>
@@ -455,6 +457,11 @@ const ARK = "https://ark.ap-southeast.bytepluses.com/api/v3";
 // Kling AI's own platform. api.klingai.com answers as well, but this key was issued in
 // Singapore and task ids are regional - a job created here is invisible from the other host.
 const KLING = "https://api-singapore.klingai.com";
+// QwenCloud (qwencloud.com) is the international storefront for Alibaba's Model Studio, and
+// its sk-ws- keys answer on the DashScope-native routes of this one host. Alibaba's own docs
+// show workspace-scoped {id}.<region>.maas.aliyuncs.com hosts instead - those go with keys
+// cut in the Model Studio console, not with a QwenCloud one.
+const QWEN = "https://dashscope-intl.aliyuncs.com/api/v1";
 // Enhancor.ai is switched off. Every service below that still carries `base` (i.e. posts
 // to apireq.enhancor.ai) keeps its definition but is dropped from the nav, so nothing can
 // be reached or sent. Flip this to true to bring the whole set back.
@@ -500,7 +507,8 @@ async function post(path, body){
   return r.json();
 }
 async function callApi(url, body, opts={}){
-  return post("/api/call", { url, body, method: opts.method || "POST", autoWebhook: opts.autoWebhook !== false });
+  return post("/api/call", { url, body, method: opts.method || "POST",
+                             autoWebhook: opts.autoWebhook !== false, headers: opts.headers });
 }
 async function uploadFile(file){
   local("sys", `uploading ${file.name} (${Math.round(file.size/1024)} KB)`);
@@ -519,7 +527,7 @@ async function refreshConfig(){
   CFG = await (await fetch("/api/config")).json();
   const k = document.getElementById("b-key"), t = document.getElementById("b-tun"),
         f = document.getElementById("b-fal"), a = document.getElementById("b-ark"),
-        kl = document.getElementById("b-kling");
+        kl = document.getElementById("b-kling"), qw = document.getElementById("b-qwen");
   // With Enhancor off, its key is not a fault worth flagging - hide the badge entirely.
   k.style.display = ENHANCOR_ON ? "" : "none";
   k.textContent = CFG.hasKey ? "ENHANCOR KEY "+CFG.keyHint : "ENHANCOR KEY MISSING";
@@ -530,6 +538,8 @@ async function refreshConfig(){
   f.className = "badge " + (CFG.hasFalKey ? "ok" : "bad");
   kl.textContent = CFG.hasKlingKey ? "KLING KEY "+CFG.klingKeyHint : "KLING KEY MISSING";
   kl.className = "badge " + (CFG.hasKlingKey ? "ok" : "bad");
+  qw.textContent = CFG.hasQwenKey ? "QWEN KEY "+CFG.qwenKeyHint : "QWEN KEY MISSING";
+  qw.className = "badge " + (CFG.hasQwenKey ? "ok" : "bad");
   pgBuild(CFG.postgenVideo || [], CFG.postgenImage || [], CFG.maxPostgen || 3);
   t.textContent = "TUNNEL " + CFG.tunnel.toUpperCase();
   t.className = "badge " + ({up:"ok", starting:"warn", missing:"bad", down:"bad", off:"warn"}[CFG.tunnel] || "");
@@ -1032,6 +1042,190 @@ const klingVideos = {
   },
 };
 
+/* ---------- QwenCloud models ---------- */
+// Both models post a DashScope envelope: `model` at the top, the inputs under `input`, every
+// knob under `parameters`. Paths are relative to QWEN, like Kling's are to KLING. What differs
+// is the input's shape and the flow -
+//   qwen-image-3.0-pro  POST /services/aigc/multimodal-generation/generation, synchronous:
+//                       input.messages[0].content is [{text}, {image}...], the result comes
+//                       back in the same response as output.choices[].message.content[].image
+//   wan3.0-video        POST /services/aigc/video-generation/video-synthesis with the
+//                       X-DashScope-Async: enable header -> output.task_id, then
+//                       GET /tasks/{id} until task_status is terminal; output.video_url
+// Fields, enums and limits are from QwenCloud's own API reference (docs.qwencloud.com),
+// read on 02/09/2026 and cross-checked against Alibaba's Model Studio page for each model.
+// Result URLs on both expire after 24 hours - which showResult's save-on-sight covers.
+
+// Sizes are free-form width*height between 512x512 and 2048x2048 of area, billed in two
+// tiers (1k / 2k) - so the chips offer one size per tier per shape, multiples of 16.
+const QWEN_SIZES = {
+  "1:1":  ["1024x1024", "2048x2048"],
+  "4:3":  ["1152x864",  "2048x1536"],
+  "3:4":  ["864x1152",  "1536x2048"],
+  "3:2":  ["1248x832",  "2048x1360"],
+  "2:3":  ["832x1248",  "1360x2048"],
+  "16:9": ["1280x720",  "2048x1152"],
+  "9:16": ["720x1280",  "1152x2048"],
+  "21:9": ["1344x576",  "2048x880"],
+};
+
+// Which keys are knobs. Everything else on the form is an input.
+const QWEN_IMG_PARAMS = ["size","n","negative_prompt","prompt_extend","prompt_extend_mode",
+                         "enable_thinking","seed","watermark"];
+const QWEN_VID_PARAMS = ["resolution","ratio","duration","audio","seed","prompt_extend","watermark"];
+
+// Splits a flat form into DashScope's input / parameters halves. `inputs(b)` builds the
+// input object from the form; the listed param keys move under parameters as they are.
+const qwenShape = (params, inputs) => b => {
+  const parameters = {};
+  params.forEach(k => { if (b[k] !== undefined && b[k] !== "") parameters[k] = b[k]; });
+  const input = inputs(b);
+  Object.keys(b).forEach(k => delete b[k]);
+  b.input = input;
+  b.parameters = parameters;
+};
+
+// Wan3.0 has three ways in, and the API refuses a mix: first/last frame on one side,
+// every reference input (image, video, audio, document, link) on the other, text alone as
+// the third. A mode select gates the boxes so the form cannot offer a combination the
+// validator rejects - the same reasoning as Kling's image-to-video / motion-control switch.
+const WAN_T2V = "text-to-video", WAN_F2V = "frame-to-video", WAN_R2V = "reference-to-video";
+const wanFrames = s => s.mode === WAN_F2V;
+const wanRefs   = s => s.mode === WAN_R2V;
+const WAN_RATIOS = ["16:9","4:3","1:1","3:4","9:16"];
+
+const wanShape = qwenShape(QWEN_VID_PARAMS, b => {
+  const media = [];
+  const add = (v, type) => (Array.isArray(v) ? v : [v]).forEach(url => media.push({ type, url }));
+  // Order is the numbering the prompt uses (Image 1, Video 1...), so the lists go in the
+  // order the form shows them. The mode gate has already dropped the other side's inputs
+  // from the state, so nothing here has to re-check the exclusion.
+  if (b.first_frame)     add(b.first_frame,     "first_frame");
+  if (b.last_frame)      add(b.last_frame,      "last_frame");
+  if (b.reference_image) add(b.reference_image, "reference_image");
+  if (b.reference_video) add(b.reference_video, "reference_video");
+  if (b.reference_audio) add(b.reference_audio, "reference_audio");
+  // A document and a link are one or the other - the document wins, as the hint says.
+  if (b.file)            add(b.file,            "file");
+  else if (b.link)       add(b.link,            "link");
+  const input = {};
+  if (b.prompt) input.prompt = b.prompt;
+  if (media.length) input.media = media;
+  return input;
+});
+
+const WAN_FIELDS = [
+  ["mode","select","Mode",{opts:[WAN_T2V, WAN_F2V, WAN_R2V], def:WAN_F2V, rerender:true,
+    hint:"frames and references cannot share a request - the mode picks which side the form offers. "
+       + "Editing or extending a clip is reference-to-video with the clip as Video 1"}],
+  ["prompt","textarea","Prompt",{def:"",rows:4,
+    by: s => wanRefs(s)
+      ? {hint:"up to 20,000 chars. Address the references as Image 1, Video 1, Audio 1... - each type "
+             + "numbered on its own, in the order listed below. \"edit\" / \"replace\" edits Video 1, "
+             + "\"extend\" / \"continue\" extends it"}
+      : wanFrames(s)
+      ? {hint:"up to 20,000 chars - optional once a frame is set, but it steers the motion"}
+      : {hint:"required - up to 20,000 chars. Dialogue, music and sound effects can be written in"}}],
+  ["first_frame","file","First frame",{when:wanFrames,
+    hint:"required in this mode - jpg/png/bmp/webp, 240-8000px a side, aspect within 8:1, 20 MB"}],
+  ["last_frame","file","Last frame",{when:wanFrames,
+    hint:"optional - the frame the video ends on; the model generates the motion between the two"}],
+  ["reference_image","files","Reference images",{when:wanRefs,
+    hint:"max 10 - jpg/png/bmp/webp, 240-8000px a side, aspect within 8:1, 20 MB each"}],
+  ["reference_video","files","Reference videos",{when:wanRefs,
+    hint:"max 5 - mp4/mov, 1-15s each and 15s combined, 240-4096px a side, 100 MB each. "
+       + "Input plus output duration must stay under 30s"}],
+  ["reference_audio","files","Reference audio",{when:wanRefs,
+    hint:"max 5 - wav/mp3, 1-15s each and 15s combined, 15 MB each"}],
+  ["file","file","Document",{when:wanRefs,
+    hint:"optional - one docx/pptx/xlsx/pdf/txt/md, max 100 MB and 50 pages. A document or a web page, "
+       + "not both - the document wins"}],
+  ["link","text","Web page",{def:"",when:wanRefs,
+    hint:"optional - one public URL (no login). Dropped if a document is set"}],
+  ["resolution","select","Resolution",{opts:["480P","720P","1080P"],def:"720P",
+    hint:"their default is 1080P - twice the per-second price of 720P. No mode needs a minimum"}],
+  // adaptive is what their guide recommends whenever there is an input to adapt to, and it is
+  // meaningless with text alone - so the list and the default follow the mode, the way
+  // Seedance 2.5's do.
+  // The static def is what a fresh form seeds with (frame mode), the text-mode def is what
+  // replaces a carried adaptive once the list no longer offers it. A ratio the user picked
+  // survives a mode switch in every other case - it is their recommendation, not a rule.
+  ["ratio","select","Aspect ratio",{def:"adaptive",
+    optsBy: s => s.mode === WAN_T2V ? WAN_RATIOS : ["adaptive", ...WAN_RATIOS],
+    by: s => s.mode === WAN_T2V ? {def:"9:16", hint:"free choice - text alone has nothing to adapt to"}
+                                : {hint:"adaptive follows the input's framing - their recommendation for this mode"}}],
+  ["duration","number","Duration (s)",{min:-1,max:30,
+    by: s => wanRefs(s)
+      ? {def:-1, hint:"2-30, or -1 to let the model pick - their recommendation for edits and extensions, "
+                    + "which keep the clip's own length. With a reference video, input plus output must stay under 30s"}
+      : {def:5, hint:"2-30, or -1 to let the model pick the length (smart duration)"}}],
+  ["audio","bool","Generate audio",{def:true,hint:"a generated soundtrack - the price is the same either way"}],
+  ["prompt_extend","bool","Prompt rewrite",{def:true,hint:"LLM rewrite of the prompt - their default is on, costs a little latency"}],
+  ["seed","number","Seed",{def:"",min:0,max:2147483647,hint:"optional - blank is random"}],
+  ["watermark","bool","Watermark",{def:false}],
+];
+
+// prime is the same model with the same inputs, faster and at twice the per-second price;
+// the drop-down on the page is where the two are told apart, so the form is shared.
+const wanVideo = (model, o) => ({
+  title: `${o.title} - ${model}`,
+  qwen: "/services/aigc/video-generation/video-synthesis", model, abbr: o.abbr,
+  shape: wanShape, fields: WAN_FIELDS,
+});
+const wanVideos = {
+  wan30:      wanVideo("wan3.0-video",       {title:"Wan3.0-Video - text / frame / reference to video", abbr:"wan30"}),
+  wan30prime: wanVideo("wan3.0-video-prime", {title:"Wan3.0-Video-Prime - same inputs, faster, double the price", abbr:"wan30p"}),
+};
+
+const qwenModels = {
+  qwenimg30pro: {
+    title: "Qwen-Image-3.0-Pro - text to image / image edit",
+    qwenImage: "/services/aigc/multimodal-generation/generation",
+    model: "qwen-image-3.0-pro", abbr: "qi30p",
+    shape: b => {
+      // "1152x2048" on the chips is "1152*2048" on the wire.
+      if (b.size) b.size = String(b.size).replace("x", "*");
+      // agent mode is text-to-image only - with an image in play the API 400s rather than
+      // ignoring it, so the mode falls back to direct instead of failing the whole request.
+      if ((b.image || []).length && b.prompt_extend_mode === "agent") b.prompt_extend_mode = "direct";
+      qwenShape(QWEN_IMG_PARAMS, b => ({
+        messages: [{ role: "user",
+          content: [{ text: b.prompt || "" }, ...(b.image || []).map(url => ({ image: url }))] }],
+      }))(b);
+    },
+    // n > 1 may come back as several choices or several content parts - take both.
+    results: j => ((j.output || {}).choices || [])
+      .flatMap(c => ((c.message || {}).content || []).map(p => p.image)).filter(Boolean),
+    fields: [
+      ["prompt","textarea","Prompt",{def:"",rows:4,
+        hint:"required - up to 4,500 tokens. Renders text down to 10px, so long layouts (menus, "
+           + "storyboards, forms) can be described in full"}],
+      ["image","files","Reference images",{
+        hint:"optional - 1 to 3, addressed as Image 1, Image 2, Image 3 in the prompt. Any image here "
+           + "switches the model from text-to-image into edit. jpg/png/bmp/tiff/webp/gif, max 10 MB each"}],
+      ["size","sizepick","Aspect ratio / resolution",{def:"1152x2048", opts:QWEN_SIZES,
+        hint:"pick the shape, then the tier - left tier bills as 1k, right as 2k. Their default is 2048*2048"}],
+      ["n","number","Number of images",{def:1,min:1,max:6,hint:"separate generations from the one prompt"}],
+      ["negative_prompt","text","Negative prompt",{def:"",
+        hint:"optional, max 500 chars. In the API reference, but their model guide lists Qwen-Image as "
+           + "ignoring it - treat it as a request"}],
+      // Rewrite mode and thinking both hang off prompt_extend: thinking "requires
+      // prompt_extend=true", and a mode for a rewrite that is not happening is noise. Both
+      // fold away with the switch, and renderService drops the hidden keys from the body.
+      ["prompt_extend","bool","Prompt rewrite",{def:true,rerender:true,
+        hint:"LLM rewrite of the prompt before generation - their default is on"}],
+      ["prompt_extend_mode","select","Rewrite mode",{opts:["direct","agent"],def:"direct",
+        when: s => s.prompt_extend !== false,
+        hint:"agent plans the layout first - text-to-image only, falls back to direct once a reference image is set"}],
+      ["enable_thinking","bool","Thinking",{def:true, when: s => s.prompt_extend !== false,
+        hint:"reasoning pass before rendering - only offered while prompt rewrite is on, which it requires"}],
+      ["seed","number","Seed",{def:"",min:0,max:2147483647,hint:"optional - blank is random"}],
+      ["watermark","bool","Watermark",{def:false}],
+    ]
+  },
+  ...wanVideos,
+};
+
 // Seedream's own documented output sizes, read off the model docs on 20/08/2026 - the
 // generic ModelArk size list the other models take is not what this one accepts.
 // Three tiers per shape (~1 / 2.4 / 4.2 MP); the picker keeps the tier when the shape changes.
@@ -1156,6 +1350,17 @@ const SERVICES = {
     title: "Bria Expand (fal.ai)", fal: "fal-ai/bria/expand",
     abbr: "brex",
     results: j => j.image && j.image.url ? [j.image.url] : [],
+    // Auto-fit the source as it lands: real size, centred, when it fits the canvas;
+    // if it would overflow, the canvas doubles (the 1080x1920 default to 2160x3840)
+    // and the source is placed at half-size, centred.
+    fit: (s, w, h) => {
+      const big = w > s.canvas_w || h > s.canvas_h;
+      if (big){ s.canvas_w *= 2; s.canvas_h *= 2; }
+      s.orig_w = big ? s.canvas_w/2 : w;
+      s.orig_h = big ? s.canvas_h/2 : h;
+      s.orig_x = Math.round((s.canvas_w - s.orig_w)/2);
+      s.orig_y = Math.round((s.canvas_h - s.orig_h)/2);
+    },
     // Bria takes three [x,y] pairs; the form asks for the six numbers separately so each
     // one gets its own label and range. A pair is only sent when both halves are filled.
     shape: b => {
@@ -1168,8 +1373,8 @@ const SERVICES = {
     },
     fields: [
       ["image_url","file","Source image",{hint:"required"}],
-      ["canvas_w","number","Canvas width",{def:1000,min:1,max:5000,hint:"required - canvas area must stay under 5000x5000"}],
-      ["canvas_h","number","Canvas height",{def:1000,min:1,max:5000,hint:"required"}],
+      ["canvas_w","number","Canvas width",{def:1080,min:1,max:5000,hint:"required - canvas area must stay under 5000x5000"}],
+      ["canvas_h","number","Canvas height",{def:1920,min:1,max:5000,hint:"required"}],
       ["aspect_ratio","select","Aspect ratio",{
         opts:["","1:1","2:3","3:2","3:4","4:3","4:5","5:4","9:16","16:9"], def:"",
         hint:"optional - when set it overrides the placement fields below"}],
@@ -1428,7 +1633,8 @@ const SERVICES = {
     ]
   },
   ...arkVideos,
-  ...klingVideos
+  ...klingVideos,
+  ...qwenModels
 };
 
 /* ---------- publisher pages ---------- */
@@ -1453,11 +1659,22 @@ const PUBLISHERS = {
     brand:"fal", name:"fal", tail:".ai",
     sub:"queue.fal.run",
     models:[["seedance15fal","Seedance 1.5 Pro i2v"], ["kling26fal","Kling 2.6 Pro i2v"]] },
+  // One publisher, two pages: an image page in the image group and a video page in the video
+  // group, because the post-gen script row a page shows is decided by the group it sits in.
+  pubQwenImage: {
+    brand:"qwen", name:"QWEN", tail:"CLOUD",
+    sub:"Qwen-Image &middot; dashscope-intl.aliyuncs.com",
+    models:[["qwenimg30pro","Qwen-Image-3.0-Pro"]] },
+  pubQwenVideo: {
+    brand:"qwen", name:"QWEN", tail:"CLOUD",
+    sub:"Wan-Video &middot; dashscope-intl.aliyuncs.com",
+    models:[["wan30","Wan3.0-Video"], ["wan30prime","Wan3.0-Video-Prime (fast)"]] },
 };
 
 /* ---------- guarded-switch nav ---------- */
 const ALL_GROUPS = [
   { label:"IMAGE EDITORS", code:"CH-01", tag:"INDEX / 01", items:[
+      ["pubQwenImage","QwenCloud Qwen-Image"],
       ["sd5pro","Dola-Seedream-5.0-pro"],
       ["seedream5edit","Seedream 5 Pro Edit"], ["briaexpand","Bria Expand"],
       ["imgeditor","Image Editor F/A"], ["kora","Kora"], ["general","Upscale"], ["detailed","Detailed"] ] },
@@ -1467,6 +1684,7 @@ const ALL_GROUPS = [
   // provider's own page. Only the Enhancor tabs (hidden while ENHANCOR_ON is off) are
   // still listed model by model, because they are not one publisher's line-up.
   { label:"VIDEO GENERATORS", code:"CH-03", tag:"INDEX / 03", items:[
+      ["pubQwenVideo","QwenCloud Wan-Video"],
       ["pubKling","Kling AI"], ["pubSeedance","BytePlus Seedance"], ["pubFal","fal.ai"],
       ["seedance","Seedance 2"], ["seedance25","Seedance 2.5"], ["minimax","MiniMax H3"],
       ["seedmini","Seed Mini"], ["klingv3","Kling 3 (Enhancor)"] ] },
@@ -1758,14 +1976,19 @@ function renderService(id, state){
       const url = document.createElement("input");
       url.type = "text"; url.placeholder = "https://... or drop a file below";
       url.value = state[name] || "";
-      url.oninput = ()=> state[name] = url.value;
+      // A service may declare fit(state,w,h) - bria expand sizes its placement fields
+      // off the measured source image as it lands (drop or paste).
+      const fitIm = src => { if (svc.fit){
+        const im = new Image(); im.onload = () => { svc.fit(state, im.naturalWidth, im.naturalHeight); redraw(); };
+        im.src = src; } };
+      url.oninput = ()=> { state[name] = url.value; fitIm(url.value); };
       cell.appendChild(url);
       const z = dropZone(async f=>{
         z.innerHTML = "uploading...";
         const r = await uploadFile(f);
         if (r){ url.value = r.url; state[name] = r.url;
           z.innerHTML = `<b>${f.name}</b><br>${r.url}`;
-          if (f.type.startsWith("image/")){ const im=document.createElement("img"); im.src=r.local; im.style.maxHeight="120px"; im.style.marginTop="8px"; z.appendChild(im); }
+          if (f.type.startsWith("image/")){ const im=document.createElement("img"); im.src=r.local; im.style.maxHeight="120px"; im.style.marginTop="8px"; z.appendChild(im); fitIm(r.local); }
         } else z.innerHTML = "<b>upload failed</b>";
       }, name);
       z.style.marginTop = "6px";
@@ -1921,36 +2144,47 @@ function renderService(id, state){
     // Kling puts the model in the path, and motion control is a different path on the same
     // model - so the endpoint is a function of the form state, not a constant.
     const kl = svc.kling && (typeof svc.kling === "function" ? svc.kling(state) : svc.kling);
+    // QwenCloud is ModelArk-shaped - model in the body, one endpoint per kind - except that
+    // the video route only queues when asked to by header; without it the call blocks.
+    // Paths are relative like Kling's, so the page prefixes the host here.
+    const qw = (svc.qwen || svc.qwenImage) && QWEN + (svc.qwen || svc.qwenImage);
     const r = svc.fal
       ? await callApi(`https://queue.fal.run/${svc.fal}`, body, { autoWebhook:false })
       : kl
       ? await callApi(KLING + kl, body, { autoWebhook:false })
       : ark
       ? await callApi(ark, Object.assign({ model: svc.model }, body), { autoWebhook:false })
+      : qw
+      ? await callApi(qw, Object.assign({ model: svc.model }, body),
+                      { autoWebhook:false, headers: svc.qwen ? { "X-DashScope-Async": "enable" } : undefined })
       : await callApi(`${svc.base}/queue`, body);
     send.disabled = false;
     if (!r.ok){ status.textContent = `failed (${r.status})`; status.className="note bad"; return; }
     const j = r.json || {};
     const abbr = outAbbr(svc, state);
-    // Image generation on ModelArk is synchronous - this one response carries the results.
-    if (svc.arkImage){
+    // Image generation on ModelArk and QwenCloud is synchronous - this one response
+    // carries the results.
+    if (svc.arkImage || svc.qwenImage){
       const urls = svc.results(j);
       if (!urls.length){
         status.className = "note bad"; status.textContent = "no image in the response";
-        local("err", `seedream returned no image: ${(r.text||"").slice(0,300)}`); return;
+        local("err", `${svc.model} returned no image: ${(r.text||"").slice(0,300)}`); return;
       }
       status.className = "note"; status.textContent = `DONE (${urls.length})`;
       urls.forEach(u => showResult(out, u, svc.model, abbr));
       return;
     }
-    // Kling's top-level request_id names the HTTP call, not the job - the task id is
-    // nested, as `id` on the new routes and `task_id` on the legacy one.
+    // Kling's and QwenCloud's top-level request_id names the HTTP call, not the job - the
+    // task id is nested: Kling's under data (`id` on the new routes, `task_id` on the legacy
+    // one), QwenCloud's under output.
     const rid = svc.kling ? ((j.data || {}).id || (j.data || {}).task_id)
-                          : (j.requestId || j.request_id || j.id);
+              : svc.qwen  ? (j.output || {}).task_id
+              : (j.requestId || j.request_id || j.id);
     status.className = "note"; status.textContent = `request ${rid||"?"} queued`;
     if (!rid) return;
     if (svc.fal) trackFal(svc, j, status, out, abbr);
     else if (svc.kling) trackKling(rid, status, out, abbr);
+    else if (svc.qwen) trackQwen(rid, status, out, abbr);
     else if (svc.ark) trackArk(svc, rid, status, out, abbr);
     else trackRequest(svc.base, rid, r.webhookToken, status, out, abbr);
   };
@@ -2088,6 +2322,40 @@ async function trackKling(id, statusEl, outEl, abbr){
     }
     statusEl.textContent = `${id} :: DONE (${urls.length})`;
     urls.forEach(u => showResult(outEl, u, id, abbr));
+    return;
+  }
+  statusEl.textContent = `${id} :: timed out polling`;
+}
+
+/* ---------- QwenCloud polling ---------- */
+// GET /tasks/{id} until task_status is terminal. Their sample 1080p run took twelve minutes
+// end to end and 30s clips run longer, so the ceiling matches Kling's half hour.
+async function trackQwen(id, statusEl, outEl, abbr){
+  for (let i=0; i<450; i++){
+    await new Promise(r=> setTimeout(r, 4000));
+    const r = await callApi(`${QWEN}/tasks/${encodeURIComponent(id)}`, null,
+                            { method:"GET", autoWebhook:false });
+    if (r.status >= 400 || r.status === 0){
+      statusEl.className = "note bad";
+      statusEl.textContent = `${id} :: polling failed (${r.status})`;
+      return;
+    }
+    const o = (r.json || {}).output || {};
+    statusEl.textContent = `${id} :: ${o.task_status || r.status}`;
+    if (["FAILED","CANCELED","UNKNOWN"].includes(o.task_status)){
+      statusEl.className = "note bad";
+      local("err", `${id} ${o.task_status}: ${o.message || o.code || (r.text||"").slice(0,300)}`);
+      return;
+    }
+    if (o.task_status !== "SUCCEEDED") continue;
+    if (!o.video_url){
+      statusEl.className = "note bad";
+      statusEl.textContent = `${id} :: succeeded with no video URL`;
+      local("err", `${id} succeeded but the task carried no video: ${(r.text||"").slice(0,300)}`);
+      return;
+    }
+    statusEl.textContent = `${id} :: DONE`;
+    showResult(outEl, o.video_url, id, abbr);
     return;
   }
   statusEl.textContent = `${id} :: timed out polling`;
