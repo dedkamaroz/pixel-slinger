@@ -14,7 +14,7 @@ so one provider's body can never go out signed with another's key.
 
 | Provider | Host | Auth | Flow |
 |---|---|---|---|
-| Kling AI | `api-singapore.klingai.com` | `Authorization: Bearer KLINGAI_API_KEY` | POST `/<capability>/<model>` (2.1 Master: POST `/v1/videos/image2video`), GET `/tasks?task_ids=` |
+| Kling AI | `api-singapore.klingai.com` | `Authorization: Bearer KLINGAI_API_KEY` | POST `/<capability>/<model>`, GET `/tasks?task_ids=` |
 | BytePlus | `ark.ap-southeast.bytepluses.com` | `Authorization: Bearer BYTEPLUS_API_KEY` | video: POST `/contents/generations/tasks`, GET `.../{id}`; image: POST `/images/generations`, synchronous |
 | fal.ai | `queue.fal.run` | `Authorization: Key FAL_KEY` | POST endpoint id, GET `status_url` then GET `response_url` |
 | QwenCloud | `dashscope-intl.aliyuncs.com` | `Authorization: Bearer QWENCLOUD_API_KEY` | video: POST `/api/v1/services/aigc/video-generation/video-synthesis` (`X-DashScope-Async: enable`), GET `/api/v1/tasks/{id}`; image: POST `/api/v1/services/aigc/multimodal-generation/generation`, synchronous |
@@ -28,8 +28,10 @@ exactly - a lookalike host matches none of them.
 
 **First run:** double-click `setup.bat` once (see [Setup](#setup)).
 
-**Start:** double-click `start.bat`. A console window opens, the tunnel comes up after a few
-seconds, and the browser opens on http://127.0.0.1:8787. Python 3.10+, no pip install.
+**Start:** double-click `start.bat`. It first pulls the latest `main` from GitHub (fast-forward
+only - a copy without git, or with a local edit in the way, just starts as it is), then a console
+window opens, the tunnel comes up after a few seconds, and the browser opens on
+http://127.0.0.1:8787. Python 3.10+, no pip install.
 
 **Stop:** press `Ctrl+C` in that console window - the tunnel is torn down on the way out and it
 prints `tunnel closed`. If you closed the window, lost it, or the server is running detached,
@@ -49,8 +51,9 @@ Get-Process cloudflared, ssh -EA SilentlyContinue     # should return nothing
 ## Setup
 
 **The short version:** download the repo (green **Code** button on GitHub -> **Download ZIP**, then
-right-click the zip -> Extract All; or `git clone` if you have git), double-click **`setup.bat`**,
-then double-click **`start.bat`**. `setup.bat` installs Python if it is missing, downloads
+right-click the zip -> Extract All; or `git clone` if you have git - a cloned copy updates itself
+every time `start.bat` runs, a zip never does), double-click **`setup.bat`**, then double-click
+**`start.bat`**. `setup.bat` installs Python if it is missing, downloads
 `cloudflared` next to the other files, and opens `.env` in Notepad for your keys. It is safe to run
 again any time - it skips whatever is already done.
 
@@ -179,9 +182,9 @@ models inside; picking one latches that switch and loads its form.
 | Page | Models |
 |---|---|
 | QwenCloud Wan-Video | `wan3.0-video`, `wan3.0-video-prime` (same inputs, faster, double the price) - text, first/last frame, or up to 10 image / 5 video / 5 audio references plus a document or web link, 2-30s or smart duration, 480P-1080P |
-| Kling AI | Kling 3.0 (+ motion control), 3.0 Omni, O1, 2.6 (+ motion control), 2.5 Turbo, 2.1 Master |
+| Kling AI | Kling 3.0 (+ motion control), 3.0 Omni, O1, 2.6 (+ motion control), 2.5 Turbo |
 | BytePlus Seedance | `dreamina-seedance-2-5-260628` (480p/720p, to 30s, 30 image / 10 video / 10 audio refs), `dreamina-seedance-2-0-260128` (to 4k, 4-15s), `-2-0-fast-`, `-2-0-mini-`, `seedance-1-5-pro-251215` (first + last frame only) |
-| fal.ai | `fal-ai/bytedance/seedance/v1.5/pro/image-to-video`, `fal-ai/kling-video/v2.6/pro/image-to-video` |
+| fal.ai | `fal-ai/kling-video/v2.5-turbo/pro/image-to-video` (opens here), `fal-ai/bytedance/seedance/v1.5/pro/image-to-video`, `fal-ai/kling-video/v2.6/pro/image-to-video` |
 
 **Gallery** - webhook results with save-to-disk, plus request history.
 
@@ -291,24 +294,21 @@ AccessKey/SecretKey pair with a ~30 minute expiry - that is the older scheme. Th
 account holds is a static `api-key-kling-...` string the platform accepts as a plain bearer
 token: no signing, no key pair, nothing to refresh.
 
-**Two request shapes, one poller.**
+**One request shape, one poller.** Every model is POST `/<capability>/<model-id>` with typed
+parts in `contents`, knobs in `settings`, id/watermark in `options`. (2.1 Master, the last model
+on the legacy flat `/v1/videos/image2video` route, was dropped on 02/09/2026 ahead of Kling
+delisting it.)
 
-| Models | Route | Body |
-|---|---|---|
-| 3.0, 3.0 Omni, O1, 2.6, 2.5 Turbo | POST `/<capability>/<model-id>` | typed parts in `contents`, knobs in `settings`, id/watermark in `options` |
-| 2.1 Master | POST `/v1/videos/image2video` | flat, model chosen by `model_name` |
-
-Both return `{code, message, request_id, data:{...}}` and the task id is *nested*: `data.id` on
-the new routes, `data.task_id` on the legacy one. The top-level `request_id` names the HTTP call,
-not the job. Polling is one route for both: `GET /tasks?task_ids=<id>`, answering
+The reply is `{code, message, request_id, data:{...}}` and the task id is *nested* at `data.id`.
+The top-level `request_id` names the HTTP call, not the job. Polling is
+`GET /tasks?task_ids=<id>`, answering
 `data: [{id, status, outputs: [{type, id, url, duration}], message, billing: [{amount}]}]` with
 `status` in `submitted / processing / succeeded / failed`.
 
 ### Silent and unwatermarked, on every model
 
 No Kling tab offers an audio or a watermark control. `klingShape` pins `settings.audio: "off"`
-and `options.watermark_info.enabled: false` on every model, and 2.1 Master's flat shape clears
-both keys and sends `watermark_info` off (that model generates no soundtrack at all).
+and `options.watermark_info.enabled: false` on every model.
 
 Both platform defaults go the other way - a generated soundtrack on the models that have one, and
 a watermarked copy - so **both have to be sent, not merely omitted**. `test_kling.js` asserts
@@ -318,7 +318,7 @@ that no tab has grown either control back and that neither value reaches the wir
 audio pinned off the field could not do anything - it is gone from the form, from `klingShape`
 and from the wire, and the tests keep it that way.
 
-### The six tabs
+### The five tabs
 
 | Tab | Endpoint | Notes |
 |---|---|---|
@@ -326,10 +326,14 @@ and from the wire, and the tests keep it that way.
 | Kling 3.0 (motion control) | `/motion-control/kling-3.0` | mode on the same tab - appearance image + motion video, 1 element, character orientation |
 | Kling 3.0 Omni | `/omni-video/kling-3.0-omni` | adds reference images, a feature video and base-video editing; aspect ratio |
 | Kling O1 | `/omni-video/kling-o1` | same input set, 720p/1080p, 3-10s, no multi-shot |
-| Kling 2.6 | `/image-to-video/kling-2.6` | first + optional last frame, 5s/10s |
+| Kling 2.6 | `/image-to-video/kling-2.6` | first + optional last frame, 720p/1080p, 5s/10s |
 | Kling 2.6 (motion control) | `/motion-control/kling-2.6` | as 3.0's, without elements |
 | Kling 2.5 Turbo | `/image-to-video/kling-2.5-turbo` | first + optional last frame, 720p/1080p, 5s/10s |
-| Kling 2.1 Master | `/v1/videos/image2video`, `model_name: kling-v2-1-master` | legacy route: `cfg_scale`, `negative_prompt`, `mode` std/pro, 5s/10s |
+
+**House defaults.** 10s on every i2v tab (12s on 3.0), 720p, and 3.0 opens single-shot. 2.6 and
+2.5 Turbo only take a last frame at 1080p, so on both tabs the resolution select narrows to 1080p
+the moment a last frame lands and reopens when it is cleared - the form never offers the 720p the
+validator refuses. fal's Kling endpoints have no resolution field, so their tabs only say so.
 
 Kling 3.0 Turbo (`/image-to-video/kling-3.0-turbo`) exists and is not wired up. Adding it is one
 entry in `klingVideos` plus one line in `PUBLISHERS.pubKling.models`.
@@ -354,18 +358,13 @@ Run with the account's own key, not read off the docs.
 - **A real render.** `/image-to-video/kling-2.5-turbo`, 720p, 5s, one first frame: `succeeded`
   after ~50s, one `.mp4`, `billing.amount` 1.5 units. That is what fixed the response shape - the
   docs carry no response body for the task query.
-- **Every route reachable.** All eight paths answer with a field-level validation error rather
+- **Every route reachable.** All seven paths answer with a field-level validation error rather
   than a 404.
 - **Unknown fields are ignored, not refused.** `{"zzz_nope": 1}` returns 200 on every model, so a
-  box the API silently drops would read as set on the form while doing nothing. That is why the
-  2.1 Master tab omits `sound`, `multi_shot`, `element_list` and `voice_list` even though the
-  validator accepts them: acceptance is not evidence of support.
-- **2.1 Master's real capability set**, from the validator: `cfg_scale` supported and range-checked
-  to [0,1] (the docs' "kling-v2.x ignores cfg_scale" note is wrong for this model); `mode` std/pro
-  only, no 4k; `duration` only `"5"` or `"10"`; `image_tail`, motion brush and camera control all
-  refused.
-- **Duration is typed differently by route** - an int in `settings` on the new routes, a string on
-  the legacy one. `klingShape` casts it once rather than trusting five field specs to agree.
+  box the API silently drops would read as set on the form while doing nothing: acceptance is not
+  evidence of support.
+- **Duration is an int in `settings`** and a select hands back a string, so `klingShape` casts it
+  once rather than trusting five field specs to agree.
 
 **Where the field lists came from.** `app.klingai.com/global/dev` is a Vue SPA that returns HTTP
 446 to anything that is not a browser. Each doc page is a lazily-imported JS module listed in
@@ -531,6 +530,17 @@ inventing one would read as a matched seed in an A/B that was never matched.
 is only sent when both halves are filled, because half a pair serialises as `[1200, null]` and
 draws a shape error instead of the plain "field required" you want. Keep the subject above 15% of
 canvas area. `aspect_ratio`, when set, overrides the placement fields.
+
+The placement fields fill themselves as the source lands. Its long side is measured against the
+canvas side of the same orientation: over 3/4 of it and the canvas becomes 4k in the source's
+orientation (2160x3840 portrait, 3840x2160 landscape), otherwise the canvas stays as set. Either
+way the source is scaled so its long side is half the matching canvas side - about a quarter of
+the area - and centred. Square counts as portrait. The fields stay editable afterwards.
+
+**Kling 2.5 Turbo i2v** - `image_url` and `prompt` required, plus `tail_image_url`, `duration`
+(`"5"`/`"10"`, string), `negative_prompt`, `cfg_scale` (0-1). Nothing else is in the schema: no
+resolution, aspect ratio, audio, voices or seed. **Kling 2.6 Pro i2v** adds `generate_audio` and
+`voice_ids` and has no `cfg_scale`. Both tabs default to 10s and silent.
 
 `sync_mode` is deliberately not exposed: it returns the image as a data URI and keeps the job out
 of request history, which breaks save-to-disk.

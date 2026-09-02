@@ -121,8 +121,8 @@ const abbrs = ["seedance", "seedance25", "minimax", "seedmini", "klingv3"]
   .map(k => SERVICES[k].abbr).map(a => typeof a === "function" ? a({ mode: "pro" }) : a);
 assert.strictEqual(new Set(abbrs).size, abbrs.length, "output abbreviations must be unique");
 
-// "Clear inputs" deletes every file/files value from the state, so any default on one of
-// those fields would be re-seeded on the next render and the upload would come back.
+// A file field is an input, never a setting: a default URL there would be seeded on every
+// fresh open (and every "Clear inputs", which is the same thing) and sent unasked.
 Object.entries(SERVICES).forEach(([id, s]) =>
   s.fields.filter(([n, t]) => t === "file" || t === "files").forEach(([n, t, l, o]) =>
     assert.strictEqual(o.def, undefined, `${id}.${n} must not have a default - clear would undo itself`)));

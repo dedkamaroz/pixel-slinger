@@ -63,8 +63,8 @@ const withPrompt = Object.entries(SERVICES)
   .filter(([, s]) => s.fields.some(([n, t]) => n === "prompt" && t === "textarea"))
   .map(([id]) => id);
 ["seedream5edit", "briaexpand", "imgeditor", "kora", "seedance", "seedance25",
- "minimax", "seedmini", "klingv3", "seedance15fal", "kling26fal",
- "k30", "k30omni", "ko1", "k26", "k25t", "k21m"]
+ "minimax", "seedmini", "klingv3", "seedance15fal", "kling26fal", "kling25tfal",
+ "k30", "k30omni", "ko1", "k26", "k25t"]
   .forEach(id => assert(withPrompt.includes(id), `${id} should get the prompt library`));
 // A prompt field typed as anything but textarea would render without the bar.
 Object.entries(SERVICES).forEach(([id, s]) => s.fields.forEach(([n, t]) => {

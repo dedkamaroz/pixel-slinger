@@ -8,3 +8,5 @@ server.log
 tasks/
 d.html
 cloudflared.exe
+temp/
+.serena/

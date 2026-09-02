@@ -84,21 +84,30 @@ assert(!("canvas_size" in b), "half a pair must never serialise as [n,null]");
 assert.deepStrictEqual(br.results({ image: { url: "z" }, seed: 1 }), ["z"]);
 assert.deepStrictEqual(br.results({}), []);
 
-// fit() fills the placement fields off the measured source: real size, centred, when it
-// fits the canvas; a source that overflows doubles the canvas (1080x1920->2160x3840) and
-// goes in at half-size, centred.
-b = { canvas_w: 1080, canvas_h: 1920 };
-br.fit(b, 500, 1000);
-assert.deepStrictEqual([b.orig_w, b.orig_h, b.orig_x, b.orig_y], [500, 1000, 290, 460],
-  "fits: real size, centred");
-assert.strictEqual(b.canvas_w, 1080, "a fitting source leaves the canvas alone");
-br.fit(b, 3000, 3000);
-assert.deepStrictEqual([b.canvas_w, b.canvas_h, b.orig_w, b.orig_h, b.orig_x, b.orig_y],
-  [2160, 3840, 1080, 1920, 540, 960], "overflow: doubled canvas, half-size, centred");
+// fit() fills the placement fields off the measured source. The source's long side is
+// measured against the canvas side of the same orientation: over 3/4 of it and the canvas
+// goes 4k in the source's orientation, otherwise it stays. Either way the source is scaled
+// to half the matching canvas side (a quarter of the area) and centred.
+const fit = (canvas, w, h) => { const b = { canvas_w: canvas[0], canvas_h: canvas[1] }; br.fit(b, w, h);
+  return [b.canvas_w, b.canvas_h, b.orig_w, b.orig_h, b.orig_x, b.orig_y]; };
+assert.deepStrictEqual(fit([1080, 1920], 500, 1000), [1080, 1920, 480, 960, 300, 480],
+  "small portrait: canvas stays, source at half height, centred");
+assert.deepStrictEqual(fit([1080, 1920], 1080, 1920), [2160, 3840, 1080, 1920, 540, 960],
+  "portrait over 3/4 of the canvas: 2160x3840, half height, centred");
+assert.deepStrictEqual(fit([1080, 1920], 3000, 3000), [2160, 3840, 1920, 1920, 120, 960],
+  "square counts as portrait");
+assert.deepStrictEqual(fit([1080, 1920], 600, 400), [1080, 1920, 540, 360, 270, 780],
+  "small landscape on a portrait canvas: canvas stays, source at half width, centred");
+assert.deepStrictEqual(fit([1080, 1920], 1600, 900), [3840, 2160, 1920, 1080, 960, 540],
+  "landscape over 3/4 of the canvas width: 3840x2160, half width, centred");
+assert.deepStrictEqual(fit([3840, 2160], 1200, 2000), [2160, 3840, 1152, 1920, 504, 960],
+  "portrait onto a landscape canvas is measured against that canvas's height");
+assert.deepStrictEqual(fit([3840, 2160], 900, 1200), [3840, 2160, 810, 1080, 1515, 540],
+  "a portrait under 3/4 of a landscape canvas's height leaves it landscape");
 
-// --- Seedance 1.5 Pro i2v / Kling 2.6 Pro i2v --------------------------------
-// No shape() on either - they are flat. What can break instead is the duration field:
-// fal types it as a string enum on both, so a "number" field would send 5 and 422.
+// --- Seedance 1.5 Pro i2v / Kling 2.6 Pro i2v / Kling 2.5 Turbo i2v ----------
+// No shape() on any of them - they are flat. What can break instead is the duration field:
+// fal types it as a string enum on all three, so a "number" field would send 5 and 422.
 const spec = (svc, name) => svc.fields.find(f => f[0] === name);
 
 const s15 = SERVICES.seedance15fal;
@@ -125,25 +134,38 @@ assert.strictEqual(k26.fal, "fal-ai/kling-video/v2.6/pro/image-to-video");
 ["start_image_url", "prompt", "end_image_url", "duration", "negative_prompt",
  "generate_audio", "voice_ids"]
   .forEach(f => assert(names(k26).includes(f), `kling 2.6 is missing ${f}`));
-// This endpoint has neither in its schema; offering them would 422 the request.
-["aspect_ratio", "seed"].forEach(f =>
+// This endpoint has none of these in its schema; offering them would 422 the request.
+["aspect_ratio", "seed", "resolution"].forEach(f =>
   assert(!names(k26).includes(f), `kling 2.6 has no ${f} in fal's schema`));
+// House defaults on the Kling tab: 10s and silent.
+assert.strictEqual(spec(k26, "generate_audio")[3].def, false);
 
-[[s15, ["4","5","6","7","8","9","10","11","12"]], [k26, ["5","10"]]].forEach(([svc, opts]) => {
+const k25 = SERVICES.kling25tfal;
+assert.strictEqual(k25.fal, "fal-ai/kling-video/v2.5-turbo/pro/image-to-video");
+// The complete input schema, read off fal's OpenAPI document on 02/09/2026 - and nothing
+// beyond it: no resolution, aspect ratio, audio, voices or seed on this endpoint.
+assert.deepStrictEqual(names(k25).sort(),
+  ["cfg_scale", "duration", "image_url", "negative_prompt", "prompt", "tail_image_url"]);
+const cfg = spec(k25, "cfg_scale")[3];
+assert.deepStrictEqual([cfg.def, cfg.min, cfg.max], [0.5, 0, 1], "cfg_scale is 0-1, fal default 0.5");
+assert.strictEqual(spec(k25, "negative_prompt")[3].def, "blur, distort, and low quality");
+
+[[s15, ["4","5","6","7","8","9","10","11","12"], "5"], [k26, ["5","10"], "10"], [k25, ["5","10"], "10"]]
+  .forEach(([svc, opts, def]) => {
   const [, type, , o] = spec(svc, "duration");
   assert.strictEqual(type, "select", `${svc.title}: duration must be a select, not a number`);
   assert.deepStrictEqual(o.opts, opts, `${svc.title}: duration enum must match fal's`);
   o.opts.forEach(v => assert.strictEqual(typeof v, "string", "durations are strings to fal"));
-  assert.strictEqual(o.def, "5");
+  assert.strictEqual(o.def, def, `${svc.title}: duration default`);
 });
 
 // Every select's default has to be one of its own options, or the field renders blank.
-[s15, k26].forEach(svc => svc.fields.forEach(([n, t, , o]) => {
+[s15, k26, k25].forEach(svc => svc.fields.forEach(([n, t, , o]) => {
   if (t === "select") assert(o.opts.includes(o.def), `${svc.title}: ${n} default is not an option`);
 }));
 
-// both outputs are { video: File }, unlike the image tabs' images[] / image
-[s15, k26].forEach(svc => {
+// all three outputs are { video: File }, unlike the image tabs' images[] / image
+[s15, k26, k25].forEach(svc => {
   assert.deepStrictEqual(svc.results({ video: { url: "v.mp4" } }), ["v.mp4"]);
   assert.deepStrictEqual(svc.results({}), [], "no video means nothing to save");
 });
@@ -172,9 +194,10 @@ Object.entries(PUBLISHERS).forEach(([pid, p]) => p.models.forEach(([id, label]) 
 // Reachable = a nav id, or a model on a page some nav id opens.
 const reachable = new Set(GROUPS.flatMap(g => g.items.flatMap(([id]) =>
   PUBLISHERS[id] ? PUBLISHERS[id].models.map(([m]) => m) : [id])));
-["seedance15fal", "kling26fal"].forEach(id =>
+["seedance15fal", "kling26fal", "kling25tfal"].forEach(id =>
   assert(reachable.has(id), `${id} is not reachable from the nav`));
-// Both fal tabs sit behind the one fal page - that is the point of consolidating them.
-assert.deepStrictEqual(PUBLISHERS.pubFal.models.map(m => m[0]), ["seedance15fal", "kling26fal"]);
+// All three fal tabs sit behind the one fal page - that is the point of consolidating them -
+// and a first visit opens on Kling 2.5 Turbo.
+assert.deepStrictEqual(PUBLISHERS.pubFal.models.map(m => m[0]), ["kling25tfal", "seedance15fal", "kling26fal"]);
 
 console.log("ok - fal field shaping");

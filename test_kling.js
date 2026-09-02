@@ -12,7 +12,7 @@ const ARK = "https://ark.ap-southeast.bytepluses.com/api/v3";
 const ENHANCOR_ON = false;   // mirrors the page
 const SERVICES = eval(html.slice(html.indexOf("const AREAS"), html.indexOf("const GROUPS")) + "\nSERVICES");
 
-const KLING_MODELS = ["k30", "k30omni", "ko1", "k26", "k25t", "k21m"];
+const KLING_MODELS = ["k30", "k30omni", "ko1", "k26", "k25t"];
 const shown = (svc, state) => svc.fields.filter(([n, t, l, o]) => !o.when || o.when(state)).map(f => f[0]);
 const path = (svc, state) => (typeof svc.kling === "function" ? svc.kling(state) : svc.kling);
 const abbr = (svc, state) => (typeof svc.abbr === "function" ? svc.abbr(state) : svc.abbr);
@@ -27,7 +27,8 @@ assert.strictEqual(path(SERVICES.ko1, {}), "/omni-video/kling-o1");
 assert.strictEqual(path(SERVICES.k26, {}), "/image-to-video/kling-2.6");
 assert.strictEqual(path(SERVICES.k26, { mode: "motion-control" }), "/motion-control/kling-2.6");
 assert.strictEqual(path(SERVICES.k25t, {}), "/image-to-video/kling-2.5-turbo");
-assert.strictEqual(path(SERVICES.k21m, {}), "/v1/videos/image2video");
+// 2.1 Master was dropped ahead of Kling delisting it - nothing may bring the legacy route back.
+assert(!SERVICES.k21m, "Kling 2.1 Master must stay gone");
 
 // Every Kling tab uses the Kling transport and nothing else, and none of them carries a
 // host in the path - the page prefixes KLING, which is the Singapore host this key belongs to.
@@ -103,22 +104,9 @@ KLING_MODELS.forEach(id => {
   const out = shape(SERVICES[id], { audio: "native", watermark: true });
   assert.strictEqual(out.audio, undefined, `${id} must not pass audio through at the top level`);
   assert.strictEqual(out.watermark, undefined, `${id} must not pass watermark through`);
-  const wm = id === "k21m" ? out.watermark_info : out.options.watermark_info;
-  assert.deepStrictEqual(wm, { enabled: false }, `${id} must send watermark_info off`);
-  if (id !== "k21m") assert.strictEqual(out.settings.audio, "off", `${id} must send audio off`);
+  assert.deepStrictEqual(out.options.watermark_info, { enabled: false }, `${id} must send watermark_info off`);
+  assert.strictEqual(out.settings.audio, "off", `${id} must send audio off`);
 });
-
-// --- 2.1 Master keeps the legacy flat body -----------------------------------
-// It is the odd one out: no contents envelope, and the model rides in model_name.
-b = shape(SERVICES.k21m, { image: "https://x/a.jpg", prompt: "p", cfg_scale: 0.5,
-  mode: "pro", duration: "5" });
-assert.strictEqual(b.model_name, "kling-v2-1-master");
-assert.strictEqual(b.contents, undefined, "the legacy route takes a flat body");
-assert.strictEqual(b.image, "https://x/a.jpg");
-assert.deepStrictEqual(b.watermark_info, { enabled: false });
-// duration is a string enum on this route - a number comes back rejected.
-SERVICES.k21m.fields.filter(f => f[0] === "duration").forEach(([, , , o]) =>
-  assert(!o.num, "2.1 Master's duration must stay a string"));
 
 // --- field gating ------------------------------------------------------------
 // A hidden field is not sent, so the gates are what keep a motion-control body off the
@@ -160,13 +148,30 @@ KLING_MODELS.forEach(id => {
 });
 
 // --- what the user asked to see ----------------------------------------------
-// House default on every Kling i2v tab: 10s, not the platform's 5s.
+// House defaults: 10s on every Kling i2v tab (12s on 3.0), not the platform's 5s; 3.0 opens
+// single-shot at 720p.
 KLING_MODELS.forEach(id => {
   const f = SERVICES[id].fields.find(([n]) => n === "duration");
-  assert(f && f[3].def === "10", `${id} duration must default to 10s`);
+  assert(f && f[3].def === (id === "k30" ? "12" : "10"), `${id} duration default is off`);
+});
+assert.strictEqual(SERVICES.k30.fields.find(([n]) => n === "multi_shot")[3].def, false);
+assert.strictEqual(SERVICES.k30.fields.find(([n]) => n === "resolution")[3].def, "720p");
+
+// 2.6 and 2.5 Turbo only take a last frame at 1080p: once one is set the resolution select
+// narrows to 1080p and its default moves with it, so a carried 720p is replaced rather than
+// sent. The last-frame field has to re-render the form for that to take effect.
+["k26", "k25t"].forEach(id => {
+  const res = SERVICES[id].fields.find(([n]) => n === "resolution")[3];
+  const tail = SERVICES[id].fields.find(([n]) => n === "last_frame")[3];
+  assert.deepStrictEqual(res.optsBy({}), ["720p", "1080p"], `${id}: no last frame, free choice`);
+  assert.deepStrictEqual(res.optsBy({ last_frame: "https://x/b.jpg" }), ["1080p"], `${id}: last frame locks 1080p`);
+  assert.strictEqual(res.by({ last_frame: "https://x/b.jpg" }).def, "1080p", `${id}: default must follow the lock`);
+  assert.strictEqual(res.by({}).def, undefined, `${id}: static default stands without a last frame`);
+  assert(tail.rerender, `${id}: last_frame must re-render the form`);
+  assert(res.hint && /1080p/.test(res.hint), `${id}: the resolution hint must say so`);
 });
 
-// The Kling page lists exactly these six, newest first, and opens on the newest.
+// The Kling page lists exactly these five, newest first, and opens on the newest.
 const navSrc = html.slice(html.indexOf("/* ---------- publisher pages ---------- */"),
                           html.indexOf("const SWITCH"));
 const { PUBLISHERS } = eval(navSrc + "\n({ PUBLISHERS })");

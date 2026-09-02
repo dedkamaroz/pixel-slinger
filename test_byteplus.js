@@ -136,7 +136,7 @@ const wm = {};
 SERVICES.sd5pro.shape(wm);
 assert.strictEqual(wm.watermark, false, "watermark must be sent as false, not left to default");
 assert(!SERVICES.sd5pro.fields.some(f => f[0] === "watermark"), "no watermark control on the form");
-assert.strictEqual(opt("sd5pro", "output_format").def, "png");
+assert.strictEqual(opt("sd5pro", "output_format").def, "jpeg");
 
 // --- the Enhancor switch -----------------------------------------------------
 // Off means unreachable: neither a nav entry nor a model behind a publisher page's

@@ -816,16 +816,12 @@ const arkVideos = {
 };
 
 /* ---------- Kling AI video models ---------- */
-// Kling's own platform runs two request shapes behind the one host:
-//   3.0 / 3.0 Omni / O1 / 2.6 / 2.5 Turbo -> POST /<capability>/<model-id>, every input a
-//     typed part in `contents`, the knobs split across `settings` and `options`
-//   2.1 Master                            -> POST /v1/videos/image2video, the older flat
-//     body keyed by model_name; it is the only one of the six still on that route
-// Both hand back a task id that the single GET /tasks?task_ids= poller reads, so one
-// tracker covers the lot. Fields, enums and limits are from Kling's own API reference,
-// checked against the live validator on 21/08/2026 - where the two disagreed (2.1 Master's
-// cfg_scale, and its refusal of image_tail / camera control / motion brush / 4k) the
-// validator won.
+// Every Kling model posts the one request shape: POST /<capability>/<model-id>, every input
+// a typed part in `contents`, the knobs split across `settings` and `options`, and a task id
+// back that GET /tasks?task_ids= polls. Fields, enums and limits are from Kling's own API
+// reference, checked against the live validator on 21/08/2026. (2.1 Master, the last model
+// on the legacy flat /v1/videos/image2video route, was dropped on 02/09/2026 ahead of Kling
+// delisting it.)
 
 const KL_DUR = ["3","4","5","6","7","8","9","10","11","12","13","14","15"];
 // audio is absent on purpose: no tab offers it, klingShape pins it off for every model.
@@ -845,6 +841,16 @@ const KL_OPTS = [
 ];
 const KL_ELEM_HINT = 'optional [{"element_id":"123","id":"Zhang"}] - element_id comes from '
   + 'Kling’s element library, id is the name @Zhang in the prompt resolves to';
+// 2.6 and 2.5 Turbo only take a last frame at 1080p. The resolution select on both tabs
+// narrows to 1080p the moment a last frame lands (the file field re-renders the form), and
+// reopens when it is cleared - so the form cannot offer the 720p the validator refuses.
+const KL_TAIL_RES = ["resolution","select","Resolution",{def:"720p",
+  optsBy: s => s.last_frame ? ["1080p"] : ["720p","1080p"],
+  by: s => s.last_frame ? {def:"1080p"} : {},
+  hint:"a last frame forces 1080p - set automatically when one is added"}];
+const KL_TAIL_HINT = "optional - needs a first frame, and forces 1080p";
+// fal's Kling endpoints carry no resolution field at all, so there is nothing to switch.
+const KL_TAIL_FAL = "Kling only takes a last frame at 1080p; this endpoint has no resolution field";
 
 const klingShape = b => {
   const c = [];
@@ -870,9 +876,8 @@ const klingShape = b => {
   // that support one, and a watermarked copy - so both have to be sent, not just omitted.
   const settings = { audio: "off" }, options = { watermark_info: { enabled: false } };
   KL_SETTINGS.forEach(k => { if (b[k] !== undefined && b[k] !== "") settings[k] = b[k]; });
-  // duration is an int on these routes - a string only on 2.1 Master's legacy one - and a
-  // select hands back a string either way, so it is normalised here rather than on each
-  // of the five field specs.
+  // duration is an int on the wire and a select hands back a string, so it is normalised
+  // here rather than on each of the five field specs.
   if (settings.duration !== undefined) settings.duration = Number(settings.duration);
   if (b.external_task_id) options.external_task_id = b.external_task_id;
   Object.keys(b).forEach(k => delete b[k]);
@@ -906,11 +911,11 @@ const klingVideos = {
         hint:"required - which input the facing follows. With an element it always follows the video"}],
       ["elements","json","Elements",{def:"",rows:3,
         hint:KL_ELEM_HINT + ". Max 3, or 1 in motion control"}],
-      ["multi_shot","bool","Multi-shot",{def:true,when:notMC,
+      ["multi_shot","bool","Multi-shot",{def:false,when:notMC,
         hint:"off renders a multi-shot prompt as a single shot"}],
       ["resolution","select","Resolution",{def:"720p",
         optsBy: s => isMC(s) ? ["720p","1080p"] : ["720p","1080p","4k"]}],
-      ["duration","select","Duration (s)",{opts:KL_DUR,def:"10",when:notMC,
+      ["duration","select","Duration (s)",{opts:KL_DUR,def:"12",when:notMC,
         hint:"motion control has no duration - the output follows the reference video"}],
       ...KL_OPTS,
     ]
@@ -978,16 +983,14 @@ const klingVideos = {
       ["prompt","textarea","Prompt",{def:"",rows:4,hint:"max 2500 chars"}],
       ["first_frame","file","First frame",{when:notMC,
         hint:"required - jpg/png, max 50 MB, at least 300px a side, aspect 1:2.5 to 2.5:1"}],
-      ["last_frame","file","Last frame",{when:notMC,
-        hint:"optional - needs a first frame, and forces 1080p"}],
+      ["last_frame","file","Last frame",{when:notMC,rerender:true,hint:KL_TAIL_HINT}],
       ["image","file","Appearance image",{when:isMC,
         hint:"required - the character the output looks like. Head and upper body clear and unobstructed"}],
       ["video","file","Motion video",{when:isMC,
         hint:"required - mp4/mov, max 100 MB, one continuous take of a single person"}],
       ["character_orientation","select","Character orientation",{opts:["video","image"],def:"video",when:isMC,
         hint:"required - which input the facing follows. image caps the motion video at 10s, video allows 30s"}],
-      ["resolution","select","Resolution",{opts:["720p","1080p"],def:"720p",
-        hint:"first-plus-last-frame forces 1080p"}],
+      KL_TAIL_RES,
       ["duration","select","Duration (s)",{opts:["5","10"],def:"10",when:notMC,
         hint:"motion control has no duration - the output follows the reference video"}],
       ...KL_OPTS,
@@ -1000,44 +1003,10 @@ const klingVideos = {
       ["prompt","textarea","Prompt",{def:"",rows:4,hint:"max 2500 chars"}],
       ["first_frame","file","First frame",{
         hint:"required - jpg/png, max 50 MB, at least 300px a side, aspect 1:2.5 to 2.5:1"}],
-      ["last_frame","file","Last frame",{
-        hint:"optional - needs a first frame, and forces 1080p"}],
-      ["resolution","select","Resolution",{opts:["720p","1080p"],def:"720p",
-        hint:"first-plus-last-frame runs at 1080p only"}],
+      ["last_frame","file","Last frame",{rerender:true,hint:KL_TAIL_HINT}],
+      KL_TAIL_RES,
       ["duration","select","Duration (s)",{opts:["5","10"],def:"10"}],
       ...KL_OPTS,
-    ]
-  },
-  k21m: {
-    // The one model of the six still on the old route: a flat body keyed by model_name,
-    // with no contents / settings envelope. What it takes was read off the live validator -
-    // it refuses image_tail, motion brush, camera control and 4k mode, and contrary to the
-    // docs' "kling-v2.x ignores cfg_scale" note it does range-check cfg_scale, so the box stays.
-    title: "Kling 2.1 Master - image to video (legacy route)",
-    kling: "/v1/videos/image2video", abbr: "k21m",
-    shape: b => {
-      b.model_name = "kling-v2-1-master";
-      // Pinned off with no control, same as the new routes. This is the flat route, so
-      // whatever sits on the body reaches the wire - anything the form no longer offers has
-      // to be cleared here, not merely left unset. The model generates no soundtrack at all,
-      // so audio and voices are dropped rather than sent off. Drop a name in here whenever a
-      // field leaves this tab.
-      ["watermark", "audio", "voices"].forEach(k => delete b[k]);
-      b.watermark_info = { enabled: false };
-    },
-    fields: [
-      ["image","file","Source image",{
-        hint:"required - the first frame. jpg/png, max 10 MB, at least 300px a side, aspect 1:2.5 to 2.5:1"}],
-      ["prompt","textarea","Prompt",{def:"",rows:4,hint:"max 2500 chars"}],
-      ["negative_prompt","text","Negative prompt",{def:"",hint:"optional, max 2500 chars"}],
-      ["cfg_scale","number","Prompt adherence",{def:0.5,min:0,max:1,step:0.05,
-        hint:"cfg_scale 0-1 - higher follows the prompt harder and leaves the model less room"}],
-      ["mode","select","Mode",{opts:["std","pro"],def:"pro",
-        hint:"std outputs 720p, pro outputs 1080p. This model has no 4k mode"}],
-      // A string enum on this route, not an integer - a number here comes back rejected.
-      ["duration","select","Duration (s)",{opts:["5","10"],def:"10",hint:"5 or 10 only on this model"}],
-      ["external_task_id","text","External task ID",{def:"",
-        hint:"optional - your own id for this job; must be unique across the account"}],
     ]
   },
 };
@@ -1212,8 +1181,8 @@ const qwenModels = {
       // Rewrite mode and thinking both hang off prompt_extend: thinking "requires
       // prompt_extend=true", and a mode for a rewrite that is not happening is noise. Both
       // fold away with the switch, and renderService drops the hidden keys from the body.
-      ["prompt_extend","bool","Prompt rewrite",{def:true,rerender:true,
-        hint:"LLM rewrite of the prompt before generation - their default is on"}],
+      ["prompt_extend","bool","Prompt rewrite",{def:false,rerender:true,
+        hint:"LLM rewrite of the prompt before generation - their default is on, ours is off"}],
       ["prompt_extend_mode","select","Rewrite mode",{opts:["direct","agent"],def:"direct",
         when: s => s.prompt_extend !== false,
         hint:"agent plans the layout first - text-to-image only, falls back to direct once a reference image is set"}],
@@ -1350,14 +1319,18 @@ const SERVICES = {
     title: "Bria Expand (fal.ai)", fal: "fal-ai/bria/expand",
     abbr: "brex",
     results: j => j.image && j.image.url ? [j.image.url] : [],
-    // Auto-fit the source as it lands: real size, centred, when it fits the canvas;
-    // if it would overflow, the canvas doubles (the 1080x1920 default to 2160x3840)
-    // and the source is placed at half-size, centred.
+    // Auto-fit the source as it lands. The source's long side is measured against the
+    // canvas side of the same orientation: over 3/4 of it and the canvas becomes 4k in the
+    // source's orientation (2160x3840 portrait, 3840x2160 landscape), otherwise the canvas
+    // stays as set. Either way the source is scaled so its long side is half the matching
+    // canvas side (about a quarter of the area) and centred. Square counts as portrait.
     fit: (s, w, h) => {
-      const big = w > s.canvas_w || h > s.canvas_h;
-      if (big){ s.canvas_w *= 2; s.canvas_h *= 2; }
-      s.orig_w = big ? s.canvas_w/2 : w;
-      s.orig_h = big ? s.canvas_h/2 : h;
+      const portrait = h >= w;
+      if ((portrait ? h / s.canvas_h : w / s.canvas_w) > 0.75)
+        [s.canvas_w, s.canvas_h] = portrait ? [2160, 3840] : [3840, 2160];
+      const long = (portrait ? s.canvas_h : s.canvas_w) / 2;
+      s.orig_w = Math.round(portrait ? long * w / h : long);
+      s.orig_h = Math.round(portrait ? long : long * h / w);
       s.orig_x = Math.round((s.canvas_w - s.orig_w)/2);
       s.orig_y = Math.round((s.canvas_h - s.orig_h)/2);
     },
@@ -1423,13 +1396,30 @@ const SERVICES = {
         hint:"required - max 10 MB, min 300x300, aspect ratio 0.40-2.50"}],
       ["prompt","textarea","Prompt",{def:"",rows:4,
         hint:"required - <<<voice_1>>> / <<<voice_2>>> reference the voice IDs below"}],
-      ["end_image_url","file","End image",{hint:"optional - same limits as the start image"}],
-      ["duration","select","Duration (s)",{opts:["5","10"],def:"5"}],
+      ["end_image_url","file","End image",{hint:"optional - same limits as the start image. "
+        + KL_TAIL_FAL}],
+      ["duration","select","Duration (s)",{opts:["5","10"],def:"10"}],
       ["negative_prompt","text","Negative prompt",{def:"blur, distort, and low quality"}],
-      ["generate_audio","bool","Generate audio",{def:true,
+      ["generate_audio","bool","Generate audio",{def:false,
         hint:"native Chinese/English speech - other languages are translated to English"}],
       ["voice_ids","json","Voice IDs",{def:"",rows:2,
         hint:'optional ["voice_id_1","voice_id_2"] - max 2, from fal-ai/kling-video/create-voice'}],
+    ]
+  },
+  kling25tfal: {
+    // Fields read off fal's OpenAPI document on 02/09/2026: no resolution, aspect ratio,
+    // audio or seed on this endpoint - the start image sets the framing.
+    title: "Kling 2.5 Turbo i2v (fal.ai)", fal: "fal-ai/kling-video/v2.5-turbo/pro/image-to-video",
+    abbr: "kv25",
+    results: j => j.video && j.video.url ? [j.video.url] : [],
+    fields: [
+      ["image_url","file","Start image",{hint:"required - the first frame"}],
+      ["prompt","textarea","Prompt",{def:"",rows:4,hint:"required - max 2500 chars"}],
+      ["tail_image_url","file","End image",{hint:"optional - the frame the video ends on. " + KL_TAIL_FAL}],
+      ["duration","select","Duration (s)",{opts:["5","10"],def:"10"}],
+      ["negative_prompt","text","Negative prompt",{def:"blur, distort, and low quality",hint:"max 2500 chars"}],
+      ["cfg_scale","number","Prompt adherence",{def:0.5,min:0,max:1,step:0.05,
+        hint:"cfg_scale 0-1 - higher follows the prompt harder and leaves the model less room"}],
     ]
   },
   // Now documented: /api/enhancor-video-pro/v1 (the old /api/seedance-2/v1 path still
@@ -1628,7 +1618,7 @@ const SERVICES = {
       // oversized request on 20/08/2026: "image area must be at most 4624220 pixels".
       ["size","sizepick","Aspect ratio / resolution",{def:"1152x2048", opts:SD5_SIZES,
         hint:"pick the shape, then the pixels - the ratio is carried by the value itself"}],
-      ["output_format","select","Output format",{opts:["png","jpeg"],def:"png"}],
+      ["output_format","select","Output format",{opts:["png","jpeg"],def:"jpeg"}],
       ["seed","number","Seed",{def:"",min:-1,max:2147483647,hint:"optional - blank is random, -1 also means random"}],
     ]
   },
@@ -1648,7 +1638,7 @@ const PUBLISHERS = {
     brand:"kling", name:"KLING", tail:"AI",
     sub:"image to video &middot; api-singapore.klingai.com",
     models:[["k30","Kling 3.0"], ["k30omni","Kling 3.0 Omni"], ["ko1","Kling O1"],
-            ["k26","Kling 2.6"], ["k25t","Kling 2.5 Turbo"], ["k21m","Kling 2.1 Master"]] },
+            ["k26","Kling 2.6"], ["k25t","Kling 2.5 Turbo"]] },
   pubSeedance: {
     brand:"byteplus", name:"BYTEPLUS", tail:"SEEDANCE",
     sub:"ModelArk &middot; ap-southeast-1",
@@ -1658,7 +1648,8 @@ const PUBLISHERS = {
   pubFal: {
     brand:"fal", name:"fal", tail:".ai",
     sub:"queue.fal.run",
-    models:[["seedance15fal","Seedance 1.5 Pro i2v"], ["kling26fal","Kling 2.6 Pro i2v"]] },
+    models:[["kling25tfal","Kling 2.5 Turbo i2v"], ["seedance15fal","Seedance 1.5 Pro i2v"],
+            ["kling26fal","Kling 2.6 Pro i2v"]] },
   // One publisher, two pages: an image page in the image group and a video page in the video
   // group, because the post-gen script row a page shows is decided by the group it sits in.
   pubQwenImage: {
@@ -1982,6 +1973,9 @@ function renderService(id, state){
         const im = new Image(); im.onload = () => { svc.fit(state, im.naturalWidth, im.naturalHeight); redraw(); };
         im.src = src; } };
       url.oninput = ()=> { state[name] = url.value; fitIm(url.value); };
+      // rerender on a file field redraws once the value has settled (blur / enter, or the
+      // upload landing), not per keystroke - a redraw replaces the box being typed into.
+      url.onchange = ()=> { if (o.rerender) redraw(); };
       cell.appendChild(url);
       const z = dropZone(async f=>{
         z.innerHTML = "uploading...";
@@ -1989,6 +1983,7 @@ function renderService(id, state){
         if (r){ url.value = r.url; state[name] = r.url;
           z.innerHTML = `<b>${f.name}</b><br>${r.url}`;
           if (f.type.startsWith("image/")){ const im=document.createElement("img"); im.src=r.local; im.style.maxHeight="120px"; im.style.marginTop="8px"; z.appendChild(im); fitIm(r.local); }
+          if (o.rerender) redraw();
         } else z.innerHTML = "<b>upload failed</b>";
       }, name);
       z.style.marginTop = "6px";
@@ -2104,14 +2099,11 @@ function renderService(id, state){
 
   const acts = document.createElement("div"); acts.className = "actions";
   const send = document.createElement("button"); send.textContent = "Queue request";
-  // Drops every upload on this tab and leaves the prompt (and the rest of the settings)
-  // alone, so the same prompt can be re-run against new media.
+  // Puts the tab back exactly as it first opened: uploads gone, every field at its default,
+  // and the prompt box reloaded from the library the way a first open does.
   const clear = document.createElement("button");
   clear.className = "ghost"; clear.textContent = "Clear inputs";
-  clear.onclick = ()=>{
-    svc.fields.forEach(([n,t])=>{ if (t==="file" || t==="files") delete state[n]; });
-    renderService(id, state);
-  };
+  clear.onclick = ()=>{ delete FORMS[id]; renderService(id); };
   const status = STATUS[id] || (STATUS[id] = document.createElement("span"));
   status.className = status.className || "note";
   acts.append(send, clear, status);
@@ -2175,9 +2167,8 @@ function renderService(id, state){
       return;
     }
     // Kling's and QwenCloud's top-level request_id names the HTTP call, not the job - the
-    // task id is nested: Kling's under data (`id` on the new routes, `task_id` on the legacy
-    // one), QwenCloud's under output.
-    const rid = svc.kling ? ((j.data || {}).id || (j.data || {}).task_id)
+    // task id is nested: Kling's under data, QwenCloud's under output.
+    const rid = svc.kling ? (j.data || {}).id
               : svc.qwen  ? (j.output || {}).task_id
               : (j.requestId || j.request_id || j.id);
     status.className = "note"; status.textContent = `request ${rid||"?"} queued`;
@@ -2291,9 +2282,8 @@ async function trackArk(svc, id, statusEl, outEl, abbr){
 }
 
 /* ---------- Kling polling ---------- */
-// One GET covers every Kling model, new route or legacy: /tasks answers for both, so the
-// 2.1 Master tab and the 3.0 tab poll the same way. 4k and 15s jobs run long, hence the
-// longer ceiling than fal's - 450 ticks is half an hour.
+// One GET covers every Kling model. 4k and 15s jobs run long, hence the longer ceiling
+// than fal's - 450 ticks is half an hour.
 async function trackKling(id, statusEl, outEl, abbr){
   for (let i=0; i<450; i++){
     await new Promise(r=> setTimeout(r, 4000));
