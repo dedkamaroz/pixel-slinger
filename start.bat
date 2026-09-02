@@ -9,6 +9,18 @@ rem setup.bat drops cloudflared.exe next to this file rather than installing it,
 rem here first; an installed copy on PATH still wins if there is no local one.
 set "PATH=%~dp0;%PATH%"
 
+rem --- update from GitHub -----------------------------------------------------------
+rem Pulls the latest main before starting, so a copy on another machine stays current
+rem without anyone opening a terminal. Fast-forward only: a local edit in the way, no
+rem network, or no git at all just says so and starts the version already here. Keys
+rem (.env), cloudflared.exe and outputs are untracked, so a pull never touches them.
+if not exist .git goto :noUpdate
+where git >nul 2>&1 || goto :noUpdate
+echo Checking GitHub for updates...
+git pull --ff-only origin main
+if errorlevel 1 echo Could not update - starting the version already here.
+:noUpdate
+
 if not exist .env (
   echo No .env found - run setup.bat first.
   pause & exit /b 1
