@@ -81,73 +81,7 @@ def test_provider_routing():
 def test_tunnel_regex():
     line = "2026-08-05 INF |  https://calm-blue-fox-42.trycloudflare.com   |"
     assert server.TUNNEL_RE.search(line).group(0) == "https://calm-blue-fox-42.trycloudflare.com"
-    line = "f50d42eeaef1d1.lhr.life tunneled with tls termination, https://f50d42eeaef1d1.lhr.life"
-    assert server.TUNNEL_RE.search(line).group(0) == "https://f50d42eeaef1d1.lhr.life"
-    # the localhost.run banner carries its own doc links - none of them may parse as the tunnel
-    assert server.TUNNEL_RE.search("see https://localhost.run/docs/ or https://admin.localhost.run") is None
     assert server.TUNNEL_RE.search("no url here") is None
-    # pinggy announces two urls, and prints its dashboard link first - taking that one would
-    # hand every provider a login page instead of the file.
-    line = "https://zuxgb-146-70-200-18.free.pinggy.net"
-    assert server.TUNNEL_RE.search(line).group(0) == line
-    line = "https://kwwov-146-70-200-18.run.pinggy-free.link"
-    assert server.TUNNEL_RE.search(line).group(0) == line
-    assert server.TUNNEL_RE.search("Upgrade to Pro: https://dashboard.pinggy.io") is None
-
-
-def test_tunnel_truly_down():
-    """Rotate only when the tunnel itself is dead. A transient blip (recheck passes)
-    or a local internet outage (net probe fails) must keep the tunnel - killing it
-    there just churns the public URL and breaks queued uploads."""
-    orig_reach, orig_net = server._tunnel_reachable, server._net_up
-    try:
-        # transient blip: the instant recheck passes, tunnel stays
-        server._tunnel_reachable = lambda: True
-        server._net_up = lambda: True
-        assert server._tunnel_truly_down() is False
-        # genuinely dead: recheck fails while the internet is fine
-        server._tunnel_reachable = lambda: False
-        assert server._tunnel_truly_down() is True
-        # local outage: the internet probe fails too, so the tunnel is kept
-        server._net_up = lambda: False
-        assert server._tunnel_truly_down() is False
-    finally:
-        server._tunnel_reachable, server._net_up = orig_reach, orig_net
-
-
-def test_flap_guard():
-    """One full lap of the ring is the ring working - on a network where only the last
-    transport passes, every earlier one has to fail first. Only a second lap is flapping."""
-    n = len(server.TUNNEL_KINDS)
-    server._rotations.clear()
-    base = time.time()
-    server._rotations[:] = [base - 100 + i for i in range(n)]
-    assert not server._flapping(base)                 # exactly one lap: still working
-    server._rotations.append(base)
-    assert server._flapping(base)                     # into a second lap: flapping
-    server._rotations[:] = [base - 901] * n + [base]  # the old lap aged out of the window
-    assert not server._flapping(base)
-    server._rotations.clear()
-
-
-def test_tunnel_ring_transports():
-    """The ring is only worth having if its entries leave the box on different ports - that
-    is what a network blocks. Ports here are the ones measured on 22/08/2026, not documented:
-    cloudflared rides 7844 on both protocols, so pinggy on 443 is the only ordinary-port way
-    out and has to stay in the ring."""
-    assert server.TUNNEL_KINDS == ("cloudflared", "cloudflared-h2", "localhost.run", "pinggy")
-    cmds = {k: server._tunnel_cmd(k) for k in server.TUNNEL_KINDS}
-    for kind, cmd in cmds.items():
-        if cmd is None:
-            continue                                   # transport not installed on this box
-        assert str(server.PORT) in " ".join(cmd), kind
-    if cmds["cloudflared"] and cmds["cloudflared-h2"]:
-        assert "--protocol" not in cmds["cloudflared"]
-        assert cmds["cloudflared-h2"][-2:] == ["--protocol", "http2"]
-    if cmds["pinggy"] and cmds["localhost.run"]:
-        assert cmds["pinggy"][cmds["pinggy"].index("-p") + 1] == "443"
-        assert "-p" not in cmds["localhost.run"]       # ssh's default, port 22
-        assert cmds["pinggy"][-1] == "a.pinggy.io"
 
 
 def test_enhancor_switch():

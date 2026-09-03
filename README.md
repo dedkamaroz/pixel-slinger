@@ -45,7 +45,7 @@ process running and it keeps serving `uploads/` to the internet. Use Ctrl+C or `
 check nothing is left over:
 
 ```powershell
-Get-Process cloudflared, ssh -EA SilentlyContinue     # should return nothing
+Get-Process cloudflared -EA SilentlyContinue     # should return nothing
 ```
 
 ## Setup
@@ -89,45 +89,11 @@ The long version, if you would rather do it by hand:
    every job fails on their side - fal with a download error, Kling with `Something went wrong
    when we tried to get the contents of the file`, BytePlus with a fetch failure.
 
-## The tunnel ring
+## The tunnel
 
-The server fetches its own public URL once a minute. Two failures, or a dead tunnel process,
-restarts the transport - the same one if it had ever proved reachable, otherwise the next in a
-ring of four. What separates the four is **the port they leave the box on**, because that is what
-a hostile network actually blocks:
-
-| Transport | Port | Notes |
-|---|---|---|
-| `cloudflared` | UDP 7844 | QUIC. The default. |
-| `cloudflared-h2` | TCP 7844 | `--protocol http2`. For networks that drop UDP but pass TCP. |
-| `localhost.run` | TCP 22 | plain ssh, no account |
-| `pinggy` | TCP 443 | plain ssh on an ordinary port. Last resort - see below. |
-
-Ports measured on 22/08/2026 with `Get-NetTCPConnection`, not read off the docs. In particular
-`--protocol http2` moves cloudflared's data plane to **TCP 7844, not 443** - it is a different
-transport but not a 443-only one. A VPN or router that blackholes 7844 leaves cloudflared
-"started" while the edge answers `530` forever; one that also blocks 22 takes localhost.run with
-it. `pinggy` on 443 is the only way out of a network like that.
-
-**pinggy's catch:** free tunnels are unauthenticated and **expire after 60 minutes**. The
-watchdog sees the expiry as an ordinary process death and restarts it, so the URL churns hourly.
-That is why it sits last in the ring - a URL that changes every hour beats no tunnel, and beats
-nothing else.
-
-Guards on the churn, because rotating costs you the public URL:
-
-- A rotation only happens once a confirm recheck plus a neutral internet probe prove the tunnel
-  itself is down, not the box's connection. A Wi-Fi or VPN blip fails every transport at once,
-  and killing a healthy tunnel over one fixes nothing.
-- A transport that proved reachable and then died gets one **same-kind restart** before the ring
-  advances. That is what pinggy needs, and it covers an ordinary process crash too.
-- More than one full lap of the ring inside 15 minutes is flapping: the network is the problem,
-  so it cools down for 5 minutes. One lap is the ring doing its job.
-- The transport that last worked is remembered in `.tunnel_kind` and tried first next start.
-
-The hostname is random and **changes every restart** - fine, the proxy rewrites the input URLs
-per request. When the ring swaps transports mid-session the URL changes too: re-upload anything
-you already queued from the old one.
+`cloudflared` opens a quick tunnel to the local server at startup. The hostname is random and
+**changes every restart** - fine, the proxy rewrites the input URLs per request. If cloudflared
+exits, the badge goes red; restart with `start.bat`.
 
 ## Why a tunnel is needed
 
