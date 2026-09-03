@@ -77,15 +77,23 @@ def check_chain():
                 return True
 
             server.run_script = fake_run
-            server.postprocess(vid, ["POSTVIDGEN_1", "POSTVIDGEN_2"])
+            server.postprocess(vid, ["POSTVIDGEN_1", "POSTVIDGEN_2"], chain=True)
             assert calls == [('"one.bat"', vid),
                              ('"two.bat"', vid.with_name("bs20_out_dm2.mp4"))], calls
 
             # A failure stops the chain rather than handing on a half-written file.
             calls.clear()
             server.run_script = lambda cmd, path: calls.append(cmd) or False
-            server.postprocess(vid, ["POSTVIDGEN_1", "POSTVIDGEN_2"])
+            server.postprocess(vid, ["POSTVIDGEN_1", "POSTVIDGEN_2"], chain=True)
             assert calls == ['"one.bat"'], calls
+
+            # Unchained (the default): every script gets the original, in slot order,
+            # and one failing does not cost the others their run.
+            calls.clear()
+            (Path(td) / "bs20_out_dm3.mp4").write_bytes(b"x")   # a fresh "output"
+            server.run_script = lambda cmd, path: calls.append((cmd, Path(path))) or False
+            server.postprocess(vid, ["POSTVIDGEN_1", "POSTVIDGEN_2"])
+            assert calls == [('"one.bat"', vid), ('"two.bat"', vid)], calls
 
             # Only three run, however many are picked, and an unknown key is skipped.
             calls.clear()
@@ -94,7 +102,7 @@ def check_chain():
                 for i, s in enumerate([scripts[0]] * 4)]
             server.run_script = lambda cmd, path: calls.append(cmd) or True
             server.postprocess(vid, ["POSTVIDGEN_1", "POSTVIDGEN_2",
-                                     "POSTVIDGEN_3", "POSTVIDGEN_4"])
+                                     "POSTVIDGEN_3", "POSTVIDGEN_4"], chain=True)
             assert calls == ['"1.bat"', '"2.bat"', '"3.bat"'], calls
             calls.clear()
             server.postprocess(vid, ["POSTVIDGEN_9"])
@@ -104,8 +112,8 @@ def check_chain():
 
 
 def check_kind_split():
-    """The saved file picks the list: an image is looked up in POSTIMGGEN and gets one
-    script, a video in POSTVIDGEN, and anything else runs nothing at all."""
+    """The saved file picks the list: an image is looked up in POSTIMGGEN, a video in
+    POSTVIDGEN, and anything else runs nothing at all."""
     asked, calls = [], []
     real = server.postgen_scripts, server.run_script
     server.postgen_scripts = lambda prefix: asked.append(prefix) or [
@@ -118,7 +126,7 @@ def check_kind_split():
             img.write_bytes(b"x")
             server.postprocess(img, ["POSTIMGGEN_1", "POSTIMGGEN_2"])
             assert asked == ["POSTIMGGEN"], asked
-            assert calls == ['"a.bat"'], calls          # one slot for images
+            assert calls == ['"a.bat"', '"b.bat"'], calls
 
             asked.clear(); calls.clear()
             txt = Path(td) / "notes.txt"

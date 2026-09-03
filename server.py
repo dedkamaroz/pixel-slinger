@@ -279,22 +279,21 @@ def call_api(method, url, body, extra_headers=None):
 
 VIDEO_EXTS = {".mp4", ".webm", ".mov", ".mkv", ".avi"}
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff"}
-MAX_POSTGEN = 3          # video slots to chain; an image gets IMG_POSTGEN
-IMG_POSTGEN = 1
+MAX_POSTGEN = 3          # script slots per saved file, video or image
 VID_PREFIX, IMG_PREFIX = "POSTVIDGEN", "POSTIMGGEN"
 
 
 def media_kind(path):
-    """(env prefix, extensions to look for downstream, slots) for a saved file, or a
-    triple of Nones if it is neither video nor image. Videos and images have separate
-    script lists so a video filter is never handed a still, or the other way round.
+    """(env prefix, extensions to look for downstream) for a saved file, or (None, None)
+    if it is neither video nor image. Videos and images have separate script lists so a
+    video filter is never handed a still, or the other way round.
     """
     ext = Path(path).suffix.lower()
     if ext in VIDEO_EXTS:
-        return VID_PREFIX, VIDEO_EXTS, MAX_POSTGEN
+        return VID_PREFIX, VIDEO_EXTS
     if ext in IMAGE_EXTS:
-        return IMG_PREFIX, IMAGE_EXTS, IMG_POSTGEN
-    return None, None, None
+        return IMG_PREFIX, IMAGE_EXTS
+    return None, None
 
 
 def _argv(cmd):
@@ -369,29 +368,33 @@ def chain_output(path, before, exts):
     return max(new, key=lambda f: f.stat().st_mtime) if new else path
 
 
-def postprocess(path, keys):
-    """Run the picked scripts in the picked order, each on what the one before produced.
+def postprocess(path, keys, chain=False):
+    """Run the picked scripts in the picked order. chain=False (the default) hands every
+    one the original saved file; chain=True hands each what the one before produced.
 
     Which list a key may name is decided by the saved file itself, so a stale pick from
     the page can never run a video script on an image.
 
-    Strictly sequential: these encoders open their output file as soon as encoding
-    starts, so the file existing means nothing - only the process exiting means the
-    output is finished and safe to hand on. A failure stops the chain rather than
-    feeding the next script a half-written file.
+    Strictly sequential either way: these encoders open their output file as soon as
+    encoding starts, so the file existing means nothing - only the process exiting means
+    the output is finished. In chain mode a failure stops the run rather than feeding
+    the next script a half-written file; run individually, the others still get their go.
     """
-    prefix, exts, slots = media_kind(path)
+    prefix, exts = media_kind(path)
     if not prefix:
         log("warn", f"{path.name} is neither video nor image - no post-gen script run")
         return
     scripts = {s["key"]: s for s in postgen_scripts(prefix)}
-    for key in list(keys)[:slots]:
+    for key in list(keys)[:MAX_POSTGEN]:
         spec = scripts.get(key)
         if not spec:
             log("warn", f"post-gen script {key} is not defined in .env - skipping")
             continue
         before = set(path.parent.iterdir())
-        if not run_script(spec["cmd"], path):
+        ok = run_script(spec["cmd"], path)
+        if not chain:
+            continue
+        if not ok:
             log("err", f"{spec['label']} failed - stopping the post-gen chain")
             return
         path = chain_output(path, before, exts)
@@ -714,7 +717,8 @@ class Handler(BaseHTTPRequestHandler):
             keys = []
         # Off-thread: the chain is minutes of encoding, the page is waiting on this response.
         if keys:
-            threading.Thread(target=postprocess, args=(dest, keys), daemon=True).start()
+            threading.Thread(target=postprocess, args=(dest, keys, bool(data.get("chain"))),
+                             daemon=True).start()
         return self._json(200, {"path": str(dest)})
 
 

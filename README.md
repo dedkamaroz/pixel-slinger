@@ -213,8 +213,9 @@ on a CDN and do expire, which is why the save no longer waits for a click.
 
 ### Post-generation scripts
 
-Saved output can be put through local scripts. **Videos** get up to three, in an order you
-choose; **images** get one. The two lists never mix. Both come from `.env`, one line per script:
+Saved output can be put through local scripts, up to three per file in an order you choose.
+**Videos** and **images** have separate lists that never mix. Both come from `.env`, one line
+per script:
 
 ```
 POSTVIDGEN_1="C:\Scripts\PostProcessing_Script.bat"
@@ -225,8 +226,9 @@ POSTIMGGEN_1="D:\Tools\upscale\img.bat"
 
 Add `POSTVIDGEN_4`, `POSTIMGGEN_2`... to offer more; each list is presented in numeric order and
 the slot number **is** the run order. A blank slot runs nothing, and three is the ceiling per
-video however many are defined. Only the row that applies to the open tab is shown, and a hidden
-row runs nothing. The drop-down label is the command's own filename, and the lists refresh from
+file however many are defined. Only the row that applies to the open tab is shown, and a hidden
+row runs nothing. Each row has a **chain** box, off by default: off, every picked script runs on
+the original saved file; on, each script is handed what the one before it wrote. The drop-down label is the command's own filename, and the lists refresh from
 `.env` on the next config poll - no restart.
 
 Each command runs with **its own folder as the working directory**, so a relative venv activates,

@@ -640,11 +640,12 @@ async function srcSave(url, abbr){
 }
 
 /* ---------- post-gen scripts ---------- */
-// Two independent rows: videos get three slots to chain, images get one. Each drop-down
-// offers every line of its own kind in .env plus "no script", and the slot number is the
-// order they run in. The picks live in localStorage - this is a setting, not something to
-// choose per job. Adding a script means adding a line to .env: the lists here are whatever
-// the server read on its last /api/config.
+// Two independent rows, three slots each. Each drop-down offers every line of its own kind
+// in .env plus "no script", and the slot number is the order they run in. The "chain" box
+// decides what they run on: off (default) and every script gets the original saved file,
+// on and each gets what the one before wrote. The picks live in localStorage - this is a
+// setting, not something to choose per job. Adding a script means adding a line to .env:
+// the lists here are whatever the server read on its last /api/config.
 const pgVidEl = document.getElementById("postgen-vid");
 const pgImgEl = document.getElementById("postgen-img");
 let pgSig = "";
@@ -666,6 +667,15 @@ function pgRow(el, title, list, slots, store, empty){
     wrap.appendChild(sel);
     el.appendChild(wrap);
   }
+  if (!list.length) return;
+  const chain = document.createElement("label");
+  chain.style.cssText = "display:inline-flex;align-items:center;gap:6px";
+  chain.title = "on: each script runs on what the previous one wrote. off: every script runs on the original saved file";
+  chain.innerHTML = `<input type="checkbox" class="pg-chain"> <span class="note">chain</span>`;
+  const box = chain.querySelector("input");
+  box.checked = localStorage.getItem(store + "chain") === "1";
+  box.onchange = ()=> localStorage.setItem(store + "chain", box.checked ? "1" : "0");
+  el.appendChild(chain);
 }
 function pgBuild(vid, img, max){
   const sig = JSON.stringify([vid, img, max]);
@@ -673,17 +683,15 @@ function pgBuild(vid, img, max){
   pgSig = sig;
   pgRow(pgVidEl, "video", vid, max, "postvidgen",
         "no POSTVIDGEN_n lines in .env");
-  pgRow(pgImgEl, "image", img, 1, "postimggen",
+  pgRow(pgImgEl, "image", img, max, "postimggen",
         "no POSTIMGGEN_n lines in .env");
 }
-// Which row a tab shows: video generators chain video scripts, the editors run the image
-// one. The gallery holds both kinds of result, so it shows both rows.
-// The hint describes only what is on screen - slot order is a video idea and reads as
-// noise on a tab that offers a single image script.
+// Which row a tab shows: video generators run video scripts, the editors image ones. The
+// gallery holds both kinds of result, so it shows both rows.
 const PG_HINT = {
   vid: "run on the saved video, in slot order - blank = none. List: POSTVIDGEN_n lines in .env",
-  img: "runs on the saved image - blank = none. List: POSTIMGGEN_n lines in .env",
-  both: "videos run the video row in slot order, images the image row - blank = none. "
+  img: "run on the saved image, in slot order - blank = none. List: POSTIMGGEN_n lines in .env",
+  both: "videos run the video row, images the image row, in slot order - blank = none. "
       + "Lists: POSTVIDGEN_n / POSTIMGGEN_n lines in .env",
 };
 const pgHintEl = document.getElementById("pg-hint");
@@ -703,6 +711,7 @@ const postGen = (isVid)=>{
   return el.style.display === "none" ? [] :
     [...el.querySelectorAll("select")].map(x=>x.value).filter(Boolean);
 };
+const pgChain = (isVid)=> !!(isVid ? pgVidEl : pgImgEl).querySelector(".pg-chain")?.checked;
 
 /* ---------- field spec ---------- */
 const AREAS = {
@@ -2365,7 +2374,7 @@ function showResult(el, url, id, abbr){
       b.disabled = false;
       return;
     }
-    const r = await post("/api/save", { url, dir: outDir(), abbr, scripts: postGen(isVid) });
+    const r = await post("/api/save", { url, dir: outDir(), abbr, scripts: postGen(isVid), chain: pgChain(isVid) });
     b.disabled = false;
     if (r.path){ b.textContent = "Saved"; b.title = r.path; }
     else { b.textContent = "Retry save"; local("err", "save failed: " + (r.error||"?")); }
@@ -2421,7 +2430,7 @@ async function renderGallery(){
         catch(e){ b.textContent = "Failed"; local("err", "save failed: " + e.message); }
         return;
       }
-      const r = await post("/api/save", { url, dir: outDir(), scripts: postGen(isVid) });
+      const r = await post("/api/save", { url, dir: outDir(), scripts: postGen(isVid), chain: pgChain(isVid) });
       b.textContent = r.path ? "Saved" : "Failed";
     };
     c.appendChild(b); cards.appendChild(c);
