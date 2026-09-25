@@ -84,6 +84,20 @@ def test_tunnel_regex():
     assert server.TUNNEL_RE.search("no url here") is None
 
 
+def test_tunnel_line():
+    """The URL is printed before the edge connects - it must not count as up until then."""
+    server.STATE["public_base"], server.STATE["tunnel"] = "", "starting"
+    seen = {}
+    server.tunnel_line("INF |  https://calm-blue-fox-42.trycloudflare.com  |", seen)
+    assert server.STATE["tunnel"] == "starting" and server.STATE["public_base"] == ""
+    server.tunnel_line('ERR Failed to dial a quic connection error="timeout"', seen)
+    assert seen.get("warned") and server.STATE["tunnel"] == "starting"
+    server.tunnel_line("INF Registered tunnel connection connIndex=0 location=syd08", seen)
+    assert server.STATE["tunnel"] == "up"
+    assert server.STATE["public_base"] == "https://calm-blue-fox-42.trycloudflare.com"
+    server.STATE["public_base"], server.STATE["tunnel"] = "", "off"
+
+
 def test_retarget_files():
     """A page left open across a restart holds URLs from the dead quick tunnel. The
     upload is still in uploads/ - only the hostname moved, so re-point it."""

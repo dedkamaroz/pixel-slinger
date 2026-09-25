@@ -219,16 +219,31 @@ def start_tunnel():
     atexit.register(stop_tunnel)
 
     def reader():
+        seen = {}
         for line in proc.stdout:
-            m = TUNNEL_RE.search(line)
-            if m and not STATE["public_base"]:
-                STATE["public_base"] = m.group(0)
-                STATE["tunnel"] = "up"
-                log("sys", f"tunnel up: {m.group(0)}")
+            tunnel_line(line, seen)
         STATE["tunnel"] = "down"
         log("warn", "cloudflared exited")
 
     threading.Thread(target=reader, daemon=True).start()
+
+
+def tunnel_line(line, seen):
+    """One line of cloudflared output. The hostname is printed before any edge connection
+    exists, and Cloudflare answers 530 for it until one registers - so the URL is only
+    handed out once cloudflared says it is actually connected."""
+    m = TUNNEL_RE.search(line)
+    if m and "url" not in seen:
+        seen["url"] = m.group(0)
+    if "Registered tunnel connection" in line and "url" in seen and not STATE["public_base"]:
+        STATE["public_base"] = seen["url"]
+        STATE["tunnel"] = "up"
+        log("sys", f"tunnel up: {seen['url']}")
+    elif ("Failed to dial" in line or "Unable to establish connection" in line) \
+            and not STATE["public_base"] and "warned" not in seen:
+        seen["warned"] = True
+        log("warn", "cloudflared cannot reach the Cloudflare edge (198.41.192.0/20, port 7844) - "
+                    "a VPN or firewall is blocking it. Uploads are not reachable until it connects.")
 
 
 def public_base():
