@@ -189,6 +189,13 @@ def log(kind, text, meta=None):
         for q in dead:
             _clients.remove(q)
     print(f"[{ev['t']}] {kind.upper():8} {text}", flush=True)
+    # The terminal always gets full detail - the page's Bodies toggle only filters the page.
+    m = ev["meta"]
+    if m.get("headers"):
+        print("  headers " + json.dumps(m["headers"]), flush=True)
+    if m.get("body") is not None:
+        b = m["body"]
+        print(b if isinstance(b, str) else json.dumps(b, indent=2), flush=True)
 
 
 # --- cloudflared quick tunnel -------------------------------------------------
@@ -794,4 +801,6 @@ def main():
 
 
 if __name__ == "__main__":
+    # cp1252 consoles choke on non-Latin text in a response body; replace, don't crash log().
+    sys.stdout.reconfigure(errors="replace")
     main()
