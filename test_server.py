@@ -84,6 +84,26 @@ def test_tunnel_regex():
     assert server.TUNNEL_RE.search("no url here") is None
 
 
+def test_retarget_files():
+    """A page left open across a restart holds URLs from the dead quick tunnel. The
+    upload is still in uploads/ - only the hostname moved, so re-point it."""
+    server.STATE["tunnel"] = "up"
+    server.STATE["public_base"] = "https://new-host.trycloudflare.com"
+    body = {"image_url": "https://alarm-dollar-ver.trycloudflare.com/files/02f2_back2.png",
+            "refs": ["http://127.0.0.1:8000/files/a.jpg",
+                     "https://cdn.example.com/files/keep.png"],
+            "prompt": "unchanged"}
+    out = server.retarget_files(body)
+    assert out["image_url"] == "https://new-host.trycloudflare.com/files/02f2_back2.png", out
+    assert out["refs"][0] == "https://new-host.trycloudflare.com/files/a.jpg", out
+    assert out["refs"][1] == "https://cdn.example.com/files/keep.png", out  # not ours
+    assert out["prompt"] == "unchanged"
+    # tunnel down: nothing to retarget to, leave the body alone
+    server.STATE["tunnel"] = "down"
+    assert server.retarget_files(body) == body
+    server.STATE["public_base"], server.STATE["tunnel"] = "", "off"
+
+
 def test_enhancor_switch():
     """Off by default, and the page as served is what decides - the file on disk always
     reads false so the offline tests can eval it without a server."""

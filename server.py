@@ -235,6 +235,22 @@ def public_base():
     return STATE["public_base"] or f"http://127.0.0.1:{PORT}"
 
 
+# A quick tunnel gets a brand new hostname every start, and a page left open across a
+# server restart still holds upload URLs from the previous one - the file is still in
+# uploads/, only the host is dead. Same for anything uploaded before the tunnel came up,
+# which got a 127.0.0.1 URL no provider can reach.
+STALE_FILES_RE = re.compile(
+    r"https?://(?:[a-z0-9-]+\.trycloudflare\.com|127\.0\.0\.1:\d+|localhost:\d+)/files/")
+
+
+def retarget_files(body):
+    """Point every /files/ URL in an outbound body at the tunnel we have now."""
+    if body is None or STATE["tunnel"] != "up":
+        return body
+    return json.loads(STALE_FILES_RE.sub(
+        lambda m: f"{public_base()}/files/", json.dumps(body)))
+
+
 # --- outbound API call --------------------------------------------------------
 
 def call_api(method, url, body, extra_headers=None):
@@ -612,7 +628,7 @@ class Handler(BaseHTTPRequestHandler):
         url = data.get("url", "")
         if not url.startswith("http"):
             return self._json(400, {"error": "url must be absolute"})
-        body = data.get("body")
+        body = retarget_files(data.get("body"))
         token = None
         # fal takes its callback as a ?fal_webhook= query param and BytePlus takes a
         # callback_url only when asked; the console polls both - so only Enhancor bodies
