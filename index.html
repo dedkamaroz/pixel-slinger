@@ -1289,7 +1289,7 @@ function veoShape(b){
   if (b.video) inst.video = b.video;
   if (b.referenceImages) inst.referenceImages = b.referenceImages.map(img => ({ image: img, referenceType: "asset" }));
   const params = {};
-  ["aspectRatio","resolution","personGeneration","negativePrompt","numberOfVideos","seed"]
+  ["aspectRatio","resolution","personGeneration","negativePrompt","seed"]
     .forEach(k => { if (b[k] != null) params[k] = b[k]; });
   if (b.durationSeconds != null) params.durationSeconds = Number(b.durationSeconds);  // number on the wire (API 400s on a string)
   for (const k in b) delete b[k];
@@ -1336,7 +1336,6 @@ const veoFields = (lite) => [
     optsBy: s => veoI2V(s) ? ["allow_adult"] : ["allow_all"],
     by: s => ({ def: veoI2V(s) ? "allow_adult" : "allow_all" }),
     hint:"set automatically: allow_all for text-to-video, allow_adult once a frame / reference / extend input is added"}],
-  ["numberOfVideos","number","Number of videos",{def:1,min:1,max:4,hint:"only 1 is documented"}],
   ["seed","number","Seed",{def:"",min:0,max:4294967295,hint:"optional - blank is random; not guaranteed deterministic"}],
 ];
 const VEO_ABBR = {
