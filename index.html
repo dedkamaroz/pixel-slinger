@@ -467,6 +467,11 @@ const QWEN = "https://dashscope-intl.aliyuncs.com/api/v1";
 // Google's Gemini API: Veo posts to /models/{id}:predictLongRunning, Omni to /interactions,
 // and the operation/files polls and the key-gated result downloads all hang off this base.
 const GEMINI = "https://generativelanguage.googleapis.com/v1beta";
+// Per-session token for the local-only endpoints (/api/blob, /api/save). page_html() swaps the
+// placeholder for the real token when it serves the page; off-disk it stays literal and unused.
+const LOCAL_TOKEN = "__LOCAL_TOKEN__";
+// Media element src can't carry a header, so the token rides the query string here.
+const blobUrl = u => "/api/blob?url=" + encodeURIComponent(u) + "&k=" + encodeURIComponent(LOCAL_TOKEN);
 // Enhancor.ai is switched off. Every service below that still carries `base` (i.e. posts
 // to apireq.enhancor.ai) keeps its definition but is dropped from the nav, so nothing can
 // be reached or sent. Flip this to true to bring the whole set back.
@@ -508,7 +513,8 @@ document.getElementById("c-wrap").onclick = e =>{ SHOW_BODIES=!SHOW_BODIES; e.ta
 
 /* ---------- transport ---------- */
 async function post(path, body){
-  const r = await fetch(path, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body) });
+  const r = await fetch(path, { method:"POST",
+    headers:{"Content-Type":"application/json", "X-Local-Token": LOCAL_TOKEN}, body:JSON.stringify(body) });
   return r.json();
 }
 async function callApi(url, body, opts={}){
@@ -643,7 +649,7 @@ async function srcWrite(name, blob){
 }
 // Provider CDNs send no CORS headers, so the bytes come through our own server.
 async function srcSave(url, abbr, isVid){
-  const r = await fetch("/api/blob?url=" + encodeURIComponent(url));
+  const r = await fetch(blobUrl(url));
   if (!r.ok) throw new Error("fetch failed: " + r.status);
   const name = await srcWrite(srcName(srcDir.name, url, abbr, isVid), await r.blob());
   local("sys", `saved -> ${srcDir.name}/${name}`);
@@ -1235,7 +1241,7 @@ const SD5_SIZES = {
 
 // Uploaded file URL -> {mime, base64}. Chunked so a big array never blows the call stack.
 async function geminiBytes(url){
-  const r = await fetch("/api/blob?url=" + encodeURIComponent(url));
+  const r = await fetch(blobUrl(url));
   if (!r.ok) throw new Error(`fetch ${url} -> ${r.status}`);
   const blob = await r.blob();
   // ponytail: base64 inlining holds ~4-5x the file resident at once; cap it so a large input
@@ -2560,7 +2566,7 @@ async function trackVeo(opName, statusEl, outEl, abbr){
     }
     statusEl.textContent = `${short} :: DONE (${uris.length})`;
     uris.forEach(u => showResult(outEl, u, short, abbr,
-      { video:true, previewUrl:"/api/blob?url=" + encodeURIComponent(u) }));
+      { video:true, previewUrl: blobUrl(u) }));
     return;
   }
   statusEl.textContent = `${short} :: timed out polling`;
@@ -2610,7 +2616,7 @@ async function trackOmni(interaction, statusEl, outEl, abbr){
     if (f.state === "ACTIVE"){
       const dl = `${GEMINI}/${fileId}:download?alt=media`;
       statusEl.textContent = `${short} :: DONE`;
-      showResult(outEl, dl, label, abbr, { video:true, previewUrl:"/api/blob?url=" + encodeURIComponent(dl) });
+      showResult(outEl, dl, label, abbr, { video:true, previewUrl: blobUrl(dl) });
       return;
     }
     await new Promise(r=> setTimeout(r, 4000));

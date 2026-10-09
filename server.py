@@ -25,6 +25,7 @@ import mimetypes
 import os
 import queue
 import re
+import secrets
 import shlex
 import shutil
 import subprocess
@@ -44,6 +45,11 @@ UPLOADS = ROOT / "uploads"
 OUTPUTS = ROOT / "outputs"
 PORT = int(os.environ.get("PORT", "8787"))
 AEST = timezone(timedelta(hours=10), "AEST")
+# Per-process secret injected into the served page and required on the local-only endpoints
+# (/api/blob, /api/save). The old guard trusted the Host header, which a cross-origin page can
+# make the browser send verbatim to 127.0.0.1 - so any site could drive those endpoints. A page
+# from another origin cannot read our served HTML, so it never learns this token.
+LOCAL_TOKEN = secrets.token_urlsafe(24)
 MAX_UPLOAD = 200 * 1024 * 1024   # feature videos go to 200 MB on the Kling tabs
 # The Enhancor tabs are built and working but switched off - set ENHANCOR=1 in start.bat to
 # bring them back. The page carries the same flag as a literal so it can be read without a
@@ -475,6 +481,9 @@ def page_html():
                           ENHANCOR_FLAG + "true;", html, count=1)
         if not n:
             log("warn", "ENHANCOR=1 but the page has no ENHANCOR_ON switch to flip")
+    # Hand the page this process's token. On disk the placeholder stays literal, so the file
+    # still evals without a server (test_kling.js reads it straight off the filesystem).
+    html = html.replace("__LOCAL_TOKEN__", LOCAL_TOKEN)
     return html.encode("utf-8")
 
 
@@ -569,12 +578,12 @@ class Handler(BaseHTTPRequestHandler):
         self.do_GET()
 
     def _blob(self):
-        """Hand a result URL's bytes to the local page, which writes them into the folder
-        the user picked with the File System Access API. Provider CDNs send no CORS
-        headers, so the page cannot fetch them itself. Local page only: through the
-        tunnel this endpoint would be an open proxy."""
-        if not self._local_request():
-            return self._json(403, {"error": "local page only"})
+        """Hand a result URL's bytes to the page, which writes them into the folder the user
+        picked with the File System Access API (or renders them in a preview). Provider CDNs
+        send no CORS headers, so the page cannot fetch them itself. Token-gated: without it this
+        is an open, cross-origin-readable proxy for any site the user happens to visit."""
+        if not self._authed():
+            return self._json(403, {"error": "token required"})
         url = urllib.parse.parse_qs(
             urllib.parse.urlsplit(self.path).query).get("url", [""])[0]
         if not url.startswith("http"):
@@ -585,7 +594,11 @@ class Handler(BaseHTTPRequestHandler):
                 blob, ctype = r.read(), r.headers.get_content_type()
         except Exception as e:
             return self._json(502, {"error": str(e)})
-        return self._send(200, blob, ctype)
+        # Never let an upstream serve HTML/SVG/etc. back on our loopback origin - only pass
+        # media types through; anything else is handed over as an opaque download.
+        if not ctype.startswith(("image/", "video/", "audio/")):
+            ctype = "application/octet-stream"
+        return self._send(200, blob, ctype, {"X-Content-Type-Options": "nosniff"})
 
     def _sse(self):
         q = queue.Queue(maxsize=1000)
@@ -711,6 +724,14 @@ class Handler(BaseHTTPRequestHandler):
         host = self.headers.get("Host", "").rsplit(":", 1)[0].strip("[]")
         return host in ("127.0.0.1", "localhost", "::1")
 
+    def _authed(self):
+        """True only if the caller carries this process's token - as the X-Local-Token header
+        (fetch/POST) or the ?k= query param (media element src, which can't send a header). A
+        cross-origin page cannot read our served HTML, so it cannot obtain the token."""
+        q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+        tok = self.headers.get("X-Local-Token") or (q.get("k") or [""])[0]
+        return bool(tok) and secrets.compare_digest(tok, LOCAL_TOKEN)
+
     def _dest_dir(self, raw):
         """Resolve the caller's save folder, falling back to outputs/.
 
@@ -750,6 +771,8 @@ class Handler(BaseHTTPRequestHandler):
         return f"{abbr}_{folder}{ext}"
 
     def _save(self, data):
+        if not self._authed():
+            return self._json(403, {"error": "token required"})
         url = data.get("url", "")
         if not url.startswith("http"):
             return self._json(400, {"error": "bad url"})
