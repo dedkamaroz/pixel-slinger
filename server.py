@@ -105,6 +105,10 @@ def qwen_key():
     return load_env().get("QWENCLOUD_API_KEY", "").strip()
 
 
+def gemini_key():
+    return load_env().get("GEMINI_API_KEY", "").strip()
+
+
 # fal's queue also answers on fal.run for the sync path; both take the same header.
 FAL_HOSTS = ("queue.fal.run", "fal.run")
 
@@ -118,6 +122,9 @@ KLING_HOST = "api-singapore.klingai.com"
 # {id}.ap-southeast-1.maas.aliyuncs.com hosts in Alibaba's docs are the Model Studio
 # console's keys, not the sk-ws- ones qwencloud.com issues.
 QWEN_HOST = "dashscope-intl.aliyuncs.com"
+# Veo (predictLongRunning), Omni (Interactions API), the operation/files polls and the
+# auth-gated result downloads all live on this one host.
+GEMINI_HOST = "generativelanguage.googleapis.com"
 
 
 def _host(url):
@@ -144,10 +151,22 @@ def is_qwen(url):
     return _host(url) == QWEN_HOST
 
 
+def is_gemini(url):
+    return _host(url) == GEMINI_HOST
+
+
+def download_headers(url):
+    """Auth for fetching a result file. Only Gemini gates downloads behind the API key;
+    every other provider hands back a public CDN URL that needs no header. The key only
+    goes over https, so it is never sent in plaintext even if an http URL reaches here."""
+    return ({"x-goog-api-key": gemini_key()}
+            if is_gemini(url) and url.startswith("https://") else {})
+
+
 def key_var(url):
     return ("FAL_KEY" if is_fal(url) else "BYTEPLUS_API_KEY" if is_ark(url)
             else "KLINGAI_API_KEY" if is_kling(url) else "QWENCLOUD_API_KEY" if is_qwen(url)
-            else "ENHANCOR_API_KEY")
+            else "GEMINI_API_KEY" if is_gemini(url) else "ENHANCOR_API_KEY")
 
 
 def auth_for(url):
@@ -164,6 +183,9 @@ def auth_for(url):
     if is_qwen(url):
         key = qwen_key()
         return {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}, key, "Authorization"
+    if is_gemini(url):
+        key = gemini_key()
+        return {"Content-Type": "application/json", "x-goog-api-key": key}, key, "x-goog-api-key"
     key = api_key()
     return {"Content-Type": "application/json", "x-api-key": key}, key, "x-api-key"
 
@@ -495,10 +517,13 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/config":
             key, fkey, akey, kkey, qkey = api_key(), fal_key(), ark_key(), kling_key(), qwen_key()
+            gkey = gemini_key()
             hint = lambda k: (k[:4] + "..." + k[-4:]) if len(k) > 8 else ""
             return self._json(200, {
                 "hasKey": bool(key),
                 "keyHint": hint(key),
+                "hasGeminiKey": bool(gkey),
+                "geminiKeyHint": hint(gkey),
                 "hasFalKey": bool(fkey),
                 "falKeyHint": hint(fkey),
                 "hasArkKey": bool(akey),
@@ -555,7 +580,8 @@ class Handler(BaseHTTPRequestHandler):
         if not url.startswith("http"):
             return self._json(400, {"error": "bad url"})
         try:
-            with urllib.request.urlopen(url, timeout=180) as r:
+            req = urllib.request.Request(url, headers=download_headers(url))
+            with urllib.request.urlopen(req, timeout=180) as r:
                 blob, ctype = r.read(), r.headers.get_content_type()
         except Exception as e:
             return self._json(502, {"error": str(e)})
@@ -733,7 +759,8 @@ class Handler(BaseHTTPRequestHandler):
         # at all, and the .bin that falls out of that matches neither the video nor the
         # image script list, so the post-gen chain would quietly run nothing.
         try:
-            with urllib.request.urlopen(url, timeout=180) as r:
+            req = urllib.request.Request(url, headers=download_headers(url))
+            with urllib.request.urlopen(req, timeout=180) as r:
                 blob, ctype = r.read(), r.headers.get_content_type()
         except Exception as e:
             log("err", f"save failed: {e}")

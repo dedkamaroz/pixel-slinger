@@ -334,6 +334,7 @@
   .pub-byteplus { --pub-a:#2E7BFF; --pub-b:#25E0D6; --pub-glow:rgba(46,123,255,.18); }
   .pub-fal      { --pub-a:#FFFFFF; --pub-b:#8E99A4; --pub-glow:rgba(255,255,255,.10); }
   .pub-qwen     { --pub-a:#7B61FF; --pub-b:#FF8A3D; --pub-glow:rgba(123,97,255,.20); }
+  .pub-google   { --pub-a:#4285F4; --pub-b:#EA4335; --pub-glow:rgba(66,133,244,.20); }
 
   /* console */
   /* right-hand column, one third of the window - the form is the wide half */
@@ -404,6 +405,7 @@
       <span class="badge" id="b-ark">BYTEPLUS KEY ?</span>
       <span class="badge" id="b-kling">KLING KEY ?</span>
       <span class="badge" id="b-qwen">QWEN KEY ?</span>
+      <span class="badge" id="b-gemini">GEMINI KEY ?</span>
       <span class="badge" id="b-tun">TUNNEL ?</span>
     </span>
   </div>
@@ -462,6 +464,9 @@ const KLING = "https://api-singapore.klingai.com";
 // show workspace-scoped {id}.<region>.maas.aliyuncs.com hosts instead - those go with keys
 // cut in the Model Studio console, not with a QwenCloud one.
 const QWEN = "https://dashscope-intl.aliyuncs.com/api/v1";
+// Google's Gemini API: Veo posts to /models/{id}:predictLongRunning, Omni to /interactions,
+// and the operation/files polls and the key-gated result downloads all hang off this base.
+const GEMINI = "https://generativelanguage.googleapis.com/v1beta";
 // Enhancor.ai is switched off. Every service below that still carries `base` (i.e. posts
 // to apireq.enhancor.ai) keeps its definition but is dropped from the nav, so nothing can
 // be reached or sent. Flip this to true to bring the whole set back.
@@ -527,7 +532,8 @@ async function refreshConfig(){
   CFG = await (await fetch("/api/config")).json();
   const k = document.getElementById("b-key"), t = document.getElementById("b-tun"),
         f = document.getElementById("b-fal"), a = document.getElementById("b-ark"),
-        kl = document.getElementById("b-kling"), qw = document.getElementById("b-qwen");
+        kl = document.getElementById("b-kling"), qw = document.getElementById("b-qwen"),
+        gm = document.getElementById("b-gemini");
   // With Enhancor off, its key is not a fault worth flagging - hide the badge entirely.
   k.style.display = ENHANCOR_ON ? "" : "none";
   k.textContent = CFG.hasKey ? "ENHANCOR KEY "+CFG.keyHint : "ENHANCOR KEY MISSING";
@@ -540,6 +546,8 @@ async function refreshConfig(){
   kl.className = "badge " + (CFG.hasKlingKey ? "ok" : "bad");
   qw.textContent = CFG.hasQwenKey ? "QWEN KEY "+CFG.qwenKeyHint : "QWEN KEY MISSING";
   qw.className = "badge " + (CFG.hasQwenKey ? "ok" : "bad");
+  gm.textContent = CFG.hasGeminiKey ? "GEMINI KEY "+CFG.geminiKeyHint : "GEMINI KEY MISSING";
+  gm.className = "badge " + (CFG.hasGeminiKey ? "ok" : "bad");
   pgBuild(CFG.postgenVideo || [], CFG.postgenImage || [], CFG.maxPostgen || 3);
   t.textContent = "TUNNEL " + CFG.tunnel.toUpperCase();
   t.className = "badge " + ({up:"ok", starting:"warn", missing:"bad", down:"bad", off:"warn"}[CFG.tunnel] || "");
@@ -605,14 +613,17 @@ document.getElementById("dir-pick").onclick = async ()=>{
 
 // Same naming as the server: <abbr>_<folder>.<ext>, no abbr (gallery re-saves) keeps the
 // timestamped original name, and an existing file is never overwritten (_2, _3...).
-function srcName(folder, url, abbr){
+function srcName(folder, url, abbr, isVid){
   const src = url.split("?")[0].split("/").pop() || "x.bin";
-  const m = src.match(/(\.[A-Za-z0-9]{1,5})$/), ext = m ? m[1] : "";
+  const m = src.match(/(\.[A-Za-z0-9]{1,5})$/);
+  // Gemini download URLs carry no extension; fall back to .mp4 for a known video (the server
+  // save path infers this from the response content-type instead).
+  const ext = m ? m[1] : (isVid ? ".mp4" : "");
   abbr = (abbr || "").replace(/[^A-Za-z0-9_-]/g, "");
   if (!abbr){
     const d = new Date(), p = n => String(n).padStart(2, "0");
     return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}_`
-         + `${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}_${src}`;
+         + `${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}_${src}${m ? "" : ext}`;
   }
   return `${abbr}_${folder || "out"}${ext || ".bin"}`;
 }
@@ -631,10 +642,10 @@ async function srcWrite(name, blob){
   }
 }
 // Provider CDNs send no CORS headers, so the bytes come through our own server.
-async function srcSave(url, abbr){
+async function srcSave(url, abbr, isVid){
   const r = await fetch("/api/blob?url=" + encodeURIComponent(url));
   if (!r.ok) throw new Error("fetch failed: " + r.status);
-  const name = await srcWrite(srcName(srcDir.name, url, abbr), await r.blob());
+  const name = await srcWrite(srcName(srcDir.name, url, abbr, isVid), await r.blob());
   local("sys", `saved -> ${srcDir.name}/${name}`);
   return `${srcDir.name}/${name}`;
 }
@@ -1214,6 +1225,135 @@ const SD5_SIZES = {
   "9:16": ["800x1424", "1152x2048", "1584x2816"],
 };
 
+/* ---------- Google: Veo 3.1 + Gemini Omni Flash 1.1 ----------
+   Two API shapes on one host. Veo is async: POST :predictLongRunning, poll the operation,
+   download a key-gated uri. Omni is the synchronous Interactions API: one POST returns a
+   Files-API uri we poll to ACTIVE, then download (also key-gated). Both downloads go through
+   /api/blob and /api/save, which attach x-goog-api-key for this host server-side.
+   Image/video inputs are uploaded URLs on our side; Gemini takes no http image URL, so prep()
+   pulls the bytes back and inlines them as base64 before the request is built. */
+
+// Uploaded file URL -> {mime, base64}. Chunked so a big array never blows the call stack.
+async function geminiBytes(url){
+  const r = await fetch("/api/blob?url=" + encodeURIComponent(url));
+  if (!r.ok) throw new Error(`fetch ${url} -> ${r.status}`);
+  const blob = await r.blob();
+  // ponytail: base64 inlining holds ~4-5x the file resident at once; cap it so a large input
+  // (e.g. an extend-video clip) can't OOM the tab. Big video inputs want the Files API instead.
+  const MB = 1024 * 1024;
+  if (blob.size > 25 * MB)
+    throw new Error(`input too large to inline (${Math.round(blob.size/MB)} MB > 25 MB) - use a smaller file`);
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const blobType = blob.type || r.headers.get("content-type") || "application/octet-stream";
+  let bin = ""; const CH = 0x8000;
+  for (let i = 0; i < bytes.length; i += CH) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+  return { mime: blobType, b64: btoa(bin) };
+}
+
+// Veo wants camelCase inlineData; Omni's Interactions API wants snake_case mime_type.
+async function veoPrep(b){
+  const inl = async u => { const x = await geminiBytes(u); return { inlineData: { mimeType: x.mime, data: x.b64 } }; };
+  if (b.image)     b.image     = await inl(b.image);
+  if (b.lastFrame) b.lastFrame = await inl(b.lastFrame);
+  if (b.video)     b.video     = await inl(b.video);
+  if (b.referenceImages) b.referenceImages = await Promise.all(b.referenceImages.map(inl));
+}
+async function omniPrep(b){
+  if (b.image) b.image = await Promise.all(b.image.map(async u => {
+    const x = await geminiBytes(u); return { type: "image", data: x.b64, mime_type: x.mime };
+  }));
+}
+
+// Flat form state -> Veo's instances[] + parameters{} split.
+function veoShape(b){
+  const inst = {};
+  if (b.prompt != null) inst.prompt = b.prompt;
+  if (b.image) inst.image = b.image;
+  if (b.lastFrame) inst.lastFrame = b.lastFrame;
+  if (b.video) inst.video = b.video;
+  if (b.referenceImages) inst.referenceImages = b.referenceImages.map(img => ({ image: img, referenceType: "asset" }));
+  const params = {};
+  ["aspectRatio","resolution","personGeneration","negativePrompt","numberOfVideos","seed"]
+    .forEach(k => { if (b[k] != null) params[k] = b[k]; });
+  if (b.durationSeconds != null) params.durationSeconds = Number(b.durationSeconds);  // number on the wire (API 400s on a string)
+  for (const k in b) delete b[k];
+  b.instances = [inst];
+  b.parameters = params;
+}
+// Flat form state -> an Interactions request body (model is added at dispatch).
+function omniShape(b){
+  const imgs = b.image || [];
+  // Text-to-video takes `input` as a plain string; any image turns it into a typed Step[]
+  // array (images first, then the text), per the Interactions API.
+  const input = imgs.length
+    ? [...imgs, ...(b.prompt ? [{ type: "text", text: b.prompt }] : [])]
+    : (b.prompt || "");
+  const rf = { type: "video", delivery: "uri" };   // uri keeps the response small; we poll the file
+  if (b.aspect_ratio) rf.aspect_ratio = b.aspect_ratio;
+  if (b.resolution)   rf.resolution   = b.resolution;
+  const vc = {};
+  if (b.task) vc.task = b.task;
+  const out = { input, response_format: rf, generation_config: { video_config: vc }, background: false, stream: false };
+  if (b.previous_interaction_id) out.previous_interaction_id = b.previous_interaction_id;
+  if (b.store != null) out.store = b.store;
+  for (const k in b) delete b[k];
+  Object.assign(b, out);
+}
+
+// Lite drops reference images, video extension and 4k; otherwise all three variants are identical.
+const veoFields = (lite) => [
+  ["prompt","textarea","Prompt",{def:"",rows:4,
+    hint:"required - up to 1,024 tokens. Audio cues written into the prompt are honoured (native audio)"}],
+  ["negativePrompt","text","Negative prompt",{def:"",hint:"optional - what to keep out of the video (Veo 3.1)"}],
+  ["image","file","First frame",{hint:"optional - image-to-video. The clip animates out of this frame"}],
+  ["lastFrame","file","Last frame",{hint:"optional - first->last interpolation. Needs a first frame set too"}],
+  ...(lite ? [] : [
+    ["referenceImages","files","Reference images",{hint:"optional - up to 3 style/content refs (not on Lite)"}],
+    ["video","file","Extend video",{hint:"optional - a Veo-made 720p clip (<=141s) to extend (not on Lite)"}],
+  ]),
+  ["aspectRatio","select","Aspect ratio",{opts:["16:9","9:16"],def:"16:9"}],
+  ["resolution","select","Resolution",{opts: lite ? ["720p","1080p"] : ["720p","1080p","4k"], def:"720p",
+    hint:"1080p and 4k require duration 8s"+(lite?"":"; 4k is not on Lite")}],
+  ["durationSeconds","select","Duration (s)",{opts:["4","6","8"],def:"8",
+    hint:"must be 8 for 1080p, 4k, reference images or extension"}],
+  ["personGeneration","select","People",{opts:["allow_all","allow_adult"],def:"allow_all",
+    hint:"text-to-video takes allow_all; image / interpolation / reference need allow_adult"}],
+  ["numberOfVideos","number","Number of videos",{def:1,min:1,max:4,hint:"only 1 is documented"}],
+  ["seed","number","Seed",{def:"",min:0,max:4294967295,hint:"optional - blank is random; not guaranteed deterministic"}],
+];
+const VEO_ABBR = {
+  "veo-3.1-generate-preview":"veo31", "veo-3.1-fast-generate-preview":"veo31f",
+  "veo-3.1-lite-generate-preview":"veo31l",
+};
+const veo = (model, title, lite=false) => ({
+  title, veo: model, abbr: VEO_ABBR[model] || "veo",
+  prep: veoPrep, shape: veoShape, fields: veoFields(lite),
+});
+
+const OMNI_FIELDS = [
+  ["prompt","textarea","Prompt",{def:"",rows:4,
+    hint:"required for text-to-video. Describe the clip; put negatives in the text (no separate field)"}],
+  ["image","files","Images",{hint:"optional - first + last frame (2) for image_to_video, or refs for reference_to_video"}],
+  ["task","select","Task",{opts:["text_to_video","image_to_video","reference_to_video","edit","extend"],def:"text_to_video",
+    hint:"edit / extend act on a previous interaction id"}],
+  ["aspect_ratio","select","Aspect ratio",{opts:["16:9","9:16"],def:"16:9"}],
+  ["resolution","select","Resolution",{opts:["360p","720p","1080p","4k"],def:"720p",hint:"1080p and 4k are upscaled"}],
+  ["previous_interaction_id","text","Previous interaction id",{def:"",
+    hint:"optional - chain an edit/extend onto an earlier clip (that clip must have been stored)"}],
+  ["store","bool","Store (editable later)",{def:true,hint:"off is faster, but the clip can't be edited in a later turn"}],
+];
+
+const geminiModels = {
+  veo31:     veo("veo-3.1-generate-preview",      "Veo 3.1 - text / image / reference / extend to video"),
+  veo31fast: veo("veo-3.1-fast-generate-preview", "Veo 3.1 Fast - same features, faster and cheaper"),
+  veo31lite: veo("veo-3.1-lite-generate-preview", "Veo 3.1 Lite - cheapest; no reference / extend / 4k", true),
+  omni11: {
+    title: "Gemini Omni Flash 1.1 - fast text / image to video, edit and extend",
+    omni: "/interactions", model: "gemini-omni-1.1-flash", abbr: "omni11",
+    prep: omniPrep, shape: omniShape, fields: OMNI_FIELDS,
+  },
+};
+
 const SERVICES = {
   skin: {
     title: "Realistic Skin Enhancement", base: `${API}/realistic-skin/v1`,
@@ -1633,7 +1773,8 @@ const SERVICES = {
   },
   ...arkVideos,
   ...klingVideos,
-  ...qwenModels
+  ...qwenModels,
+  ...geminiModels
 };
 
 /* ---------- publisher pages ---------- */
@@ -1669,6 +1810,11 @@ const PUBLISHERS = {
     brand:"qwen", name:"QWEN", tail:"CLOUD",
     sub:"Wan-Video &middot; dashscope-intl.aliyuncs.com",
     models:[["wan30","Wan3.0-Video"], ["wan30prime","Wan3.0-Video-Prime (fast)"]] },
+  pubGoogle: {
+    brand:"google", name:"GOOGLE", tail:"GEMINI",
+    sub:"Veo 3.1 &middot; Omni Flash 1.1 &middot; generativelanguage.googleapis.com",
+    models:[["veo31","Veo 3.1"], ["veo31fast","Veo 3.1 Fast"], ["veo31lite","Veo 3.1 Lite"],
+            ["omni11","Gemini Omni Flash 1.1"]] },
 };
 
 /* ---------- guarded-switch nav ---------- */
@@ -1684,7 +1830,7 @@ const ALL_GROUPS = [
   // provider's own page. Only the Enhancor tabs (hidden while ENHANCOR_ON is off) are
   // still listed model by model, because they are not one publisher's line-up.
   { label:"VIDEO GENERATORS", code:"CH-03", tag:"INDEX / 03", items:[
-      ["pubQwenVideo","QwenCloud Wan-Video"],
+      ["pubQwenVideo","QwenCloud Wan-Video"], ["pubGoogle","Google (Veo / Omni)"],
       ["pubKling","Kling AI"], ["pubSeedance","BytePlus Seedance"], ["pubFal","fal.ai"],
       ["seedance","Seedance 2"], ["seedance25","Seedance 2.5"], ["minimax","MiniMax H3"],
       ["seedmini","Seed Mini"], ["klingv3","Kling 3 (Enhancor)"] ] },
@@ -2115,6 +2261,7 @@ function renderService(id, state){
   clear.onclick = ()=>{ delete FORMS[id]; renderService(id); };
   const status = STATUS[id] || (STATUS[id] = document.createElement("span"));
   status.className = status.className || "note";
+  status.setAttribute("aria-live", "polite");   // announce queue/poll/done progress to screen readers
   acts.append(send, clear, status);
   FORM_HOST.appendChild(acts);
   // Same node every render, so a tracker that is mid-poll keeps writing into the panel
@@ -2135,9 +2282,17 @@ function renderService(id, state){
       }
       body[k] = v;
     }
-    if (svc.shape) svc.shape(body);
     send.disabled = true;
     status.className = "note";        // clear a "bad" left over from the last run
+    // prep() runs before shape(): it pulls any uploaded image/video inputs back as base64,
+    // which shape() then folds into the request body (Gemini takes no http image URL).
+    if (svc.prep){
+      status.textContent = "preparing inputs...";
+      try { await svc.prep(body); }
+      catch(e){ status.className = "note bad"; status.textContent = "input prep failed";
+                local("err", "prep failed: " + e.message); send.disabled = false; return; }
+    }
+    if (svc.shape) svc.shape(body);
     status.textContent = "queuing...";
     // fal queues at the endpoint id itself and polls; Enhancor queues at /queue and webhooks;
     // BytePlus takes the model in the body, so one endpoint serves every model it hosts.
@@ -2149,8 +2304,16 @@ function renderService(id, state){
     // the video route only queues when asked to by header; without it the call blocks.
     // Paths are relative like Kling's, so the page prefixes the host here.
     const qw = (svc.qwen || svc.qwenImage) && QWEN + (svc.qwen || svc.qwenImage);
+    // Gemini: Veo takes the model in the path (:predictLongRunning); Omni takes it in the body,
+    // like ModelArk. Both auth with x-goog-api-key, which the proxy sets by host.
+    const veoUrl = svc.veo && `${GEMINI}/models/${svc.veo}:predictLongRunning`;
+    const omniUrl = svc.omni && GEMINI + svc.omni;
     const r = svc.fal
       ? await callApi(`https://queue.fal.run/${svc.fal}`, body, { autoWebhook:false })
+      : veoUrl
+      ? await callApi(veoUrl, body, { autoWebhook:false })
+      : omniUrl
+      ? await callApi(omniUrl, Object.assign({ model: svc.model }, body), { autoWebhook:false })
       : kl
       ? await callApi(KLING + kl, body, { autoWebhook:false })
       : ark
@@ -2163,6 +2326,16 @@ function renderService(id, state){
     if (!r.ok){ status.textContent = `failed (${r.status})`; status.className="note bad"; return; }
     const j = r.json || {};
     const abbr = outAbbr(svc, state);
+    // Veo hands back a long-running operation name to poll; Omni is synchronous and the one
+    // response already carries (a pointer to) the finished clip.
+    if (svc.veo){
+      const op = j.name || "";
+      if (!op){ status.className = "note bad"; status.textContent = "no operation in response";
+                local("err", `veo: no operation name: ${(r.text||"").slice(0,300)}`); return; }
+      status.textContent = `${op.split("/").pop()} queued`;
+      trackVeo(op, status, out, abbr); return;
+    }
+    if (svc.omni){ status.textContent = "generating..."; trackOmni(j, status, out, abbr); return; }
     // Image generation on ModelArk and QwenCloud is synchronous - this one response
     // carries the results.
     if (svc.arkImage || svc.qwenImage){
@@ -2360,16 +2533,110 @@ async function trackQwen(id, statusEl, outEl, abbr){
   statusEl.textContent = `${id} :: timed out polling`;
 }
 
-function showResult(el, url, id, abbr){
-  const isVid = /\.(mp4|webm|mov)(\?|$)/i.test(url);
+/* ---------- Veo polling ---------- */
+// GET the operation until done. Generation runs 11s to ~6 min, so the ceiling is generous.
+// The result uri is key-gated: preview through /api/blob, which the proxy auths by host.
+async function trackVeo(opName, statusEl, outEl, abbr){
+  const short = opName.split("/").pop();
+  for (let i=0; i<300; i++){
+    await new Promise(r=> setTimeout(r, 8000));
+    const r = await callApi(`${GEMINI}/${opName}`, null, { method:"GET", autoWebhook:false });
+    if (r.status >= 400 || r.status === 0){
+      statusEl.className = "note bad";
+      statusEl.textContent = `${short} :: polling failed (${r.status})`; return;
+    }
+    const j = r.json || {};
+    statusEl.textContent = `${short} :: ${j.done ? "done" : "running"}`;
+    if (!j.done) continue;
+    if (j.error){
+      statusEl.className = "note bad"; statusEl.textContent = `${short} :: FAILED`;
+      local("err", `${short} failed: ${JSON.stringify(j.error).slice(0,400)}`); return;
+    }
+    const samples = (((j.response || {}).generateVideoResponse || {}).generatedSamples) || [];
+    const uris = (Array.isArray(samples) ? samples : []).map(s => (s && s.video || {}).uri).filter(Boolean);
+    if (!uris.length){
+      statusEl.className = "note bad"; statusEl.textContent = `${short} :: done, no video uri`;
+      local("err", `${short} done but no uri: ${(r.text||"").slice(0,400)}`); return;
+    }
+    statusEl.textContent = `${short} :: DONE (${uris.length})`;
+    uris.forEach(u => showResult(outEl, u, short, abbr,
+      { video:true, previewUrl:"/api/blob?url=" + encodeURIComponent(u) }));
+    return;
+  }
+  statusEl.textContent = `${short} :: timed out polling`;
+}
+
+/* ---------- Omni polling ---------- */
+// Interactions is synchronous, so `interaction` is already the finished turn. With
+// delivery:uri it points at a Files-API object we poll to ACTIVE, then download (key-gated).
+// If only inline base64 came back, surface it as a data: URL (preview only).
+// Search only the model_output steps: the interaction echoes the prompt and other input in
+// user_input steps, and a files/... id mentioned there must not be mistaken for the result.
+function omniOutputSteps(j){
+  const steps = (j && Array.isArray(j.steps)) ? j.steps : [];
+  const outs = steps.filter(s => s && s.type === "model_output");
+  return outs.length ? outs : steps;   // fall back to all steps if the type field is absent
+}
+function omniFindFile(scope){
+  let found = null;
+  (function walk(v){
+    if (found) return;
+    if (typeof v === "string"){ const m = v.match(/files\/[A-Za-z0-9_-]+/); if (m) found = m[0]; }
+    else if (Array.isArray(v)) v.forEach(walk);
+    else if (v && typeof v === "object") Object.values(v).forEach(walk);
+  })(scope);
+  return found;
+}
+async function trackOmni(interaction, statusEl, outEl, abbr){
+  // The interaction id (not the file id) is what edit/extend needs as previous_interaction_id,
+  // so surface it - in the console and on the result card - or the chaining field is unusable.
+  const iid = interaction && interaction.id;
+  if (iid) local("sys", `omni interaction id: ${iid}${interaction.store === false ? " (not stored - can't be edited)" : ""}`);
+  const fileId = omniFindFile(omniOutputSteps(interaction));
+  if (!fileId){
+    statusEl.className = "note bad"; statusEl.textContent = "no video file in response";
+    local("err", `omni: no file in model output: ${JSON.stringify(interaction).slice(0,500)}`); return;
+  }
+  const short = fileId.split("/").pop();
+  const label = iid ? `${short} · ${iid}` : short;
+  for (let i=0; i<150; i++){
+    const r = await callApi(`${GEMINI}/${fileId}`, null, { method:"GET", autoWebhook:false });
+    if (r.status >= 400 || r.status === 0){
+      statusEl.className = "note bad"; statusEl.textContent = `${short} :: poll failed (${r.status})`; return;
+    }
+    const f = r.json || {};
+    statusEl.textContent = `${short} :: ${f.state || r.status}`;
+    if (f.state === "FAILED"){ statusEl.className = "note bad"; local("err", `omni file ${short} FAILED`); return; }
+    if (f.state === "ACTIVE"){
+      const dl = `${GEMINI}/${fileId}:download?alt=media`;
+      statusEl.textContent = `${short} :: DONE`;
+      showResult(outEl, dl, label, abbr, { video:true, previewUrl:"/api/blob?url=" + encodeURIComponent(dl) });
+      return;
+    }
+    await new Promise(r=> setTimeout(r, 4000));
+  }
+  statusEl.textContent = `${short} :: timed out polling`;
+}
+
+function showResult(el, url, id, abbr, opts={}){
+  const isVid = opts.video || /\.(mp4|webm|mov)(\?|$)/i.test(url);
+  const preview = opts.previewUrl || url;    // key-gated downloads preview through /api/blob
   const c = document.createElement("div"); c.className="card"; c.style.marginTop="12px"; c.style.maxWidth="420px";
-  c.innerHTML = `${isVid?`<video src="${url}" controls></video>`:`<img src="${url}">`}
-    <div class="meta"><b>${id}</b>${url}</div>`;
+  // esc() the preview src and build the meta via textContent: id/url can come straight from a
+  // provider's JSON (Gemini operation/file ids, result URIs), so never put them in innerHTML raw.
+  const label = esc(String(id));
+  c.innerHTML = isVid
+    ? `<video src="${esc(preview)}" controls aria-label="${label} video"></video>`
+    : `<img src="${esc(preview)}" alt="${label} result">`;
+  const meta = document.createElement("div"); meta.className = "meta";
+  const idb = document.createElement("b"); idb.textContent = id;
+  meta.append(idb, document.createTextNode(" " + url));
+  c.appendChild(meta);
   const b = document.createElement("button"); b.className="ghost"; b.style.margin="0 9px 9px";
   const save = async ()=>{
     b.disabled = true; b.textContent = "Saving...";
     if (srcDir && !postGen(isVid).length){
-      try { b.title = await srcSave(url, abbr); b.textContent = "Saved"; }
+      try { b.title = await srcSave(url, abbr, isVid); b.textContent = "Saved"; }
       catch(e){ b.textContent = "Retry save"; local("err", "save failed: " + e.message); }
       b.disabled = false;
       return;
