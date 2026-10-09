@@ -1309,9 +1309,11 @@ function omniShape(b){
   if (b.resolution)   rf.resolution   = b.resolution;
   const vc = {};
   if (b.task) vc.task = b.task;
-  const out = { input, response_format: rf, generation_config: { video_config: vc }, background: false, stream: false };
+  // Always store: URI delivery requires store=true, and it is what lets a clip be edited /
+  // extended later. The ~2-6s cost is not worth a separate inline path, so there is no toggle.
+  const out = { input, response_format: rf, generation_config: { video_config: vc },
+                store: true, background: false, stream: false };
   if (b.previous_interaction_id) out.previous_interaction_id = b.previous_interaction_id;
-  if (b.store != null) out.store = b.store;
   for (const k in b) delete b[k];
   Object.assign(b, out);
 }
@@ -1356,8 +1358,7 @@ const OMNI_FIELDS = [
   ["aspect_ratio","select","Aspect ratio",{opts:["16:9","9:16"],def:"9:16"}],
   ["resolution","select","Resolution",{opts:["360p","720p","1080p","4k"],def:"720p",hint:"1080p and 4k are upscaled"}],
   ["previous_interaction_id","text","Previous interaction id",{def:"",
-    hint:"optional - chain an edit/extend onto an earlier clip (that clip must have been stored)"}],
-  ["store","bool","Store (editable later)",{def:false,hint:"off is faster, but the clip can't be edited in a later turn"}],
+    hint:"optional - chain an edit/extend onto an earlier clip"}],
 ];
 
 const geminiModels = {
