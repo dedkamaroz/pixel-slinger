@@ -753,17 +753,21 @@ class Handler(BaseHTTPRequestHandler):
         return d
 
     @staticmethod
-    def _out_name(dest_dir, url, abbr):
-        """<abbr>_<destination folder>.<output ext>, e.g. C:\\new\\dir -> sd2_dir.mp4.
+    def _out_name(dest_dir, url, abbr, src_name=None):
+        """<input>_<abbr>.<ext> when the job had an image input (e.g. portrait01_sd2.mp4),
+        else <abbr>_<destination folder>.<ext>, e.g. C:\\new\\dir -> sd2_dir.mp4.
 
-        Built from the *resolved* folder, so a rejected save path is named after the
-        outputs/ it actually landed in rather than the one that was asked for.
+        The folder half is built from the *resolved* folder, so a rejected save path is
+        named after the outputs/ it actually landed in rather than the one asked for.
         """
         src = os.path.basename(url.split("?")[0]) or f"{uuid.uuid4().hex[:8]}.bin"
         ext = os.path.splitext(src)[1] or ".bin"
         abbr = re.sub(r"[^A-Za-z0-9_-]", "", abbr or "")
         if not abbr:
             return f"{datetime.now(AEST).strftime('%Y%m%d_%H%M%S')}_{src}"
+        src_name = re.sub(r"[^A-Za-z0-9_-]", "", src_name or "")
+        if src_name:
+            return f"{src_name}_{abbr}{ext}"
         # A drive root (C:\) has no name component. PureWindowsPath reads both slash
         # styles, so a Windows folder named on a Mac still yields its last component.
         p = PureWindowsPath(dest_dir)
@@ -788,7 +792,7 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             log("err", f"save failed: {e}")
             return self._json(502, {"error": str(e)})
-        stem, ext = os.path.splitext(self._out_name(dest_dir, url, data.get("abbr")))
+        stem, ext = os.path.splitext(self._out_name(dest_dir, url, data.get("abbr"), data.get("input")))
         if ext == ".bin":
             ext = mimetypes.guess_extension(ctype) or ".bin"
         dest = dest_dir / (stem + ext)

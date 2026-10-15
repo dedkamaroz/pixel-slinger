@@ -38,6 +38,14 @@ def main():
     assert name(Path(r"C:\new\dir"), mp4, None).endswith("_abc123.mp4")
     # abbr is sanitised - it reaches the filename directly
     assert name(Path(r"C:\new\dir"), mp4, "../../evil") == "evil_dir.mp4"
+    # an image input names the output <input>_<abbr>, folder dropped
+    assert name(Path(r"C:\new\dir"), mp4, "sd2", "portrait01") == "portrait01_sd2.mp4"
+    # input name is sanitised too
+    assert name(Path(r"C:\new\dir"), mp4, "sd2", "../../evil.jpg") == "eviljpg_sd2.mp4"
+    # blank input falls back to <abbr>_<folder>
+    assert name(Path(r"C:\new\dir"), mp4, "sd2", "") == "sd2_dir.mp4"
+    # no abbr ignores input and keeps the timestamped original
+    assert name(Path(r"C:\new\dir"), mp4, None, "portrait01").endswith("_abc123.mp4")
     # an extensionless result URL still produces a usable file
     assert name(Path(r"C:\new\dir"), "https://cdn.x/out/abc123", "sd2") == "sd2_dir.bin"
     print("ok")

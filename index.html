@@ -617,9 +617,10 @@ document.getElementById("dir-pick").onclick = async ()=>{
     dirEl.disabled = false; dirNote.textContent = ""; };
 };
 
-// Same naming as the server: <abbr>_<folder>.<ext>, no abbr (gallery re-saves) keeps the
-// timestamped original name, and an existing file is never overwritten (_2, _3...).
-function srcName(folder, url, abbr, isVid){
+// Same naming as the server: <input>_<abbr> when the job had an image input, else
+// <abbr>_<folder>. No abbr (gallery re-saves) keeps the timestamped original name, and an
+// existing file is never overwritten (_2, _3...).
+function srcName(folder, url, abbr, isVid, input){
   const src = url.split("?")[0].split("/").pop() || "x.bin";
   const m = src.match(/(\.[A-Za-z0-9]{1,5})$/);
   // Gemini download URLs carry no extension; fall back to .mp4 for a known video (the server
@@ -631,6 +632,8 @@ function srcName(folder, url, abbr, isVid){
     return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}_`
          + `${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}_${src}${m ? "" : ext}`;
   }
+  input = (input || "").replace(/[^A-Za-z0-9_-]/g, "");
+  if (input) return `${input}_${abbr}${ext || ".bin"}`;
   return `${abbr}_${folder || "out"}${ext || ".bin"}`;
 }
 async function srcWrite(name, blob){
@@ -648,10 +651,10 @@ async function srcWrite(name, blob){
   }
 }
 // Provider CDNs send no CORS headers, so the bytes come through our own server.
-async function srcSave(url, abbr, isVid){
+async function srcSave(url, abbr, isVid, input){
   const r = await fetch(blobUrl(url));
   if (!r.ok) throw new Error("fetch failed: " + r.status);
-  const name = await srcWrite(srcName(srcDir.name, url, abbr, isVid), await r.blob());
+  const name = await srcWrite(srcName(srcDir.name, url, abbr, isVid, input), await r.blob());
   local("sys", `saved -> ${srcDir.name}/${name}`);
   return `${srcDir.name}/${name}`;
 }
@@ -2358,6 +2361,7 @@ function renderService(id, state){
     if (!r.ok){ status.textContent = `failed (${r.status})`; status.className="note bad"; return; }
     const j = r.json || {};
     const abbr = outAbbr(svc, state);
+    const input = inputName(svc, state);
     // Veo hands back a long-running operation name to poll; Omni is synchronous and the one
     // response already carries (a pointer to) the finished clip.
     if (svc.veo){
@@ -2365,9 +2369,9 @@ function renderService(id, state){
       if (!op){ status.className = "note bad"; status.textContent = "no operation in response";
                 local("err", `veo: no operation name: ${(r.text||"").slice(0,300)}`); return; }
       status.textContent = `${op.split("/").pop()} queued`;
-      trackVeo(op, status, out, abbr); return;
+      trackVeo(op, status, out, abbr, input); return;
     }
-    if (svc.omni){ status.textContent = "generating..."; trackOmni(j, status, out, abbr); return; }
+    if (svc.omni){ status.textContent = "generating..."; trackOmni(j, status, out, abbr, input); return; }
     // Image generation on ModelArk and QwenCloud is synchronous - this one response
     // carries the results.
     if (svc.arkImage || svc.qwenImage){
@@ -2377,7 +2381,7 @@ function renderService(id, state){
         local("err", `${svc.model} returned no image: ${(r.text||"").slice(0,300)}`); return;
       }
       status.className = "note"; status.textContent = `DONE (${urls.length})`;
-      urls.forEach(u => showResult(out, u, svc.model, abbr));
+      urls.forEach(u => showResult(out, u, svc.model, abbr, input));
       return;
     }
     // Kling's and QwenCloud's top-level request_id names the HTTP call, not the job - the
@@ -2387,11 +2391,11 @@ function renderService(id, state){
               : (j.requestId || j.request_id || j.id);
     status.className = "note"; status.textContent = `request ${rid||"?"} queued`;
     if (!rid) return;
-    if (svc.fal) trackFal(svc, j, status, out, abbr);
-    else if (svc.kling) trackKling(rid, status, out, abbr);
-    else if (svc.qwen) trackQwen(rid, status, out, abbr);
-    else if (svc.ark) trackArk(svc, rid, status, out, abbr);
-    else trackRequest(svc.base, rid, r.webhookToken, status, out, abbr);
+    if (svc.fal) trackFal(svc, j, status, out, abbr, input);
+    else if (svc.kling) trackKling(rid, status, out, abbr, input);
+    else if (svc.qwen) trackQwen(rid, status, out, abbr, input);
+    else if (svc.ark) trackArk(svc, rid, status, out, abbr, input);
+    else trackRequest(svc.base, rid, r.webhookToken, status, out, abbr, input);
   };
 }
 
@@ -2400,9 +2404,20 @@ function renderService(id, state){
 function outAbbr(svc, state){
   return typeof svc.abbr === "function" ? svc.abbr(state) : (svc.abbr || "out");
 }
+// The first-frame input's original filename, recovered from its uploaded URL
+// (uploads are stored as <8hex>_<name>), used to name the output after its input.
+// First singular file field that isn't a trailing-frame/mask input wins; "" when
+// there's no image input (text-to-video), so naming falls back to <abbr>_<folder>.
+function inputName(svc, state){
+  const f = (svc.fields || []).find(([n, t]) =>
+    t === "file" && !/last|end|tail|mask/i.test(n) && state[n]);
+  if (!f) return "";
+  const base = decodeURIComponent((state[f[0]].split("?")[0].split("/").pop()) || "");
+  return base.replace(/\.[^.]+$/, "").replace(/^[0-9a-f]{8}_/i, "");
+}
 
 /* ---------- polling ---------- */
-async function trackRequest(base, requestId, token, statusEl, outEl, abbr){
+async function trackRequest(base, requestId, token, statusEl, outEl, abbr, input){
   for (let i=0; i<150; i++){
     await new Promise(r=> setTimeout(r, 4000));
     const r = await callApi(`${base}/status`, { request_id: requestId }, { autoWebhook:false });
@@ -2412,7 +2427,7 @@ async function trackRequest(base, requestId, token, statusEl, outEl, abbr){
     const url = hook?.result || j.result || j.output || j.url;
     if (url){
       reportFal({ text: JSON.stringify(hook||j) + " " + url, headers: r.headers }, requestId);
-      statusEl.textContent = `${requestId} :: DONE`; showResult(outEl, url, requestId, abbr); return;
+      statusEl.textContent = `${requestId} :: DONE`; showResult(outEl, url, requestId, abbr, input); return;
     }
     if (["FAILED","ERROR"].includes(j.status)){ statusEl.className="note bad"; return; }
     if (j.status === "COMPLETED" && !url && i>2){
@@ -2426,7 +2441,7 @@ async function trackRequest(base, requestId, token, statusEl, outEl, abbr){
 // No webhook on this path: submit hands back status_url and response_url, both GETs.
 // Using the URLs fal returns rather than building them - for a nested endpoint id
 // (bytedance/seedream/v5/pro/edit) the request path is not the endpoint id.
-async function trackFal(svc, sub, statusEl, outEl, abbr){
+async function trackFal(svc, sub, statusEl, outEl, abbr, input){
   const get = url => callApi(url, null, { method:"GET", autoWebhook:false });
   for (let i=0; i<150; i++){
     await new Promise(r=> setTimeout(r, 4000));
@@ -2450,7 +2465,7 @@ async function trackFal(svc, sub, statusEl, outEl, abbr){
       return;
     }
     statusEl.textContent = `${sub.request_id} :: DONE (${urls.length})`;
-    urls.forEach(u => showResult(outEl, u, sub.request_id, abbr));
+    urls.forEach(u => showResult(outEl, u, sub.request_id, abbr, input));
     return;
   }
   statusEl.textContent = `${sub.request_id} :: timed out polling`;
@@ -2459,7 +2474,7 @@ async function trackFal(svc, sub, statusEl, outEl, abbr){
 /* ---------- BytePlus polling ---------- */
 // One GET per tick until the task is terminal. Result URLs are signed and expire, which is
 // why showResult saves on sight rather than waiting for a click.
-async function trackArk(svc, id, statusEl, outEl, abbr){
+async function trackArk(svc, id, statusEl, outEl, abbr, input){
   for (let i=0; i<300; i++){
     await new Promise(r=> setTimeout(r, 4000));
     const r = await callApi(`${ARK}/contents/generations/tasks/${id}`, null,
@@ -2486,10 +2501,10 @@ async function trackArk(svc, id, statusEl, outEl, abbr){
       return;
     }
     statusEl.textContent = `${id} :: DONE`;
-    urls.forEach(u => showResult(outEl, u, id, abbr));
+    urls.forEach(u => showResult(outEl, u, id, abbr, input));
     // Only present when the form asked for it - the chaining frame for the next clip.
     if (j.content && j.content.last_frame_url)
-      showResult(outEl, j.content.last_frame_url, id + "-last", abbr);
+      showResult(outEl, j.content.last_frame_url, id + "-last", abbr, input);
     return;
   }
   statusEl.textContent = `${id} :: timed out polling`;
@@ -2498,7 +2513,7 @@ async function trackArk(svc, id, statusEl, outEl, abbr){
 /* ---------- Kling polling ---------- */
 // One GET covers every Kling model. 4k and 15s jobs run long, hence the longer ceiling
 // than fal's - 450 ticks is half an hour.
-async function trackKling(id, statusEl, outEl, abbr){
+async function trackKling(id, statusEl, outEl, abbr, input){
   for (let i=0; i<450; i++){
     await new Promise(r=> setTimeout(r, 4000));
     const r = await callApi(`${KLING}/tasks?task_ids=${encodeURIComponent(id)}`, null,
@@ -2525,7 +2540,7 @@ async function trackKling(id, statusEl, outEl, abbr){
       return;
     }
     statusEl.textContent = `${id} :: DONE (${urls.length})`;
-    urls.forEach(u => showResult(outEl, u, id, abbr));
+    urls.forEach(u => showResult(outEl, u, id, abbr, input));
     return;
   }
   statusEl.textContent = `${id} :: timed out polling`;
@@ -2534,7 +2549,7 @@ async function trackKling(id, statusEl, outEl, abbr){
 /* ---------- QwenCloud polling ---------- */
 // GET /tasks/{id} until task_status is terminal. Their sample 1080p run took twelve minutes
 // end to end and 30s clips run longer, so the ceiling matches Kling's half hour.
-async function trackQwen(id, statusEl, outEl, abbr){
+async function trackQwen(id, statusEl, outEl, abbr, input){
   for (let i=0; i<450; i++){
     await new Promise(r=> setTimeout(r, 4000));
     const r = await callApi(`${QWEN}/tasks/${encodeURIComponent(id)}`, null,
@@ -2559,7 +2574,7 @@ async function trackQwen(id, statusEl, outEl, abbr){
       return;
     }
     statusEl.textContent = `${id} :: DONE`;
-    showResult(outEl, o.video_url, id, abbr);
+    showResult(outEl, o.video_url, id, abbr, input);
     return;
   }
   statusEl.textContent = `${id} :: timed out polling`;
@@ -2568,7 +2583,7 @@ async function trackQwen(id, statusEl, outEl, abbr){
 /* ---------- Veo polling ---------- */
 // GET the operation until done. Generation runs 11s to ~6 min, so the ceiling is generous.
 // The result uri is key-gated: preview through /api/blob, which the proxy auths by host.
-async function trackVeo(opName, statusEl, outEl, abbr){
+async function trackVeo(opName, statusEl, outEl, abbr, input){
   const short = opName.split("/").pop();
   for (let i=0; i<300; i++){
     await new Promise(r=> setTimeout(r, 8000));
@@ -2591,7 +2606,7 @@ async function trackVeo(opName, statusEl, outEl, abbr){
       local("err", `${short} done but no uri: ${(r.text||"").slice(0,400)}`); return;
     }
     statusEl.textContent = `${short} :: DONE (${uris.length})`;
-    uris.forEach(u => showResult(outEl, u, short, abbr,
+    uris.forEach(u => showResult(outEl, u, short, abbr, input,
       { video:true, previewUrl: blobUrl(u) }));
     return;
   }
@@ -2619,7 +2634,7 @@ function omniFindFile(scope){
   })(scope);
   return found;
 }
-async function trackOmni(interaction, statusEl, outEl, abbr){
+async function trackOmni(interaction, statusEl, outEl, abbr, input){
   // The interaction id (not the file id) is what edit/extend needs as previous_interaction_id,
   // so surface it - in the console and on the result card - or the chaining field is unusable.
   const iid = interaction && interaction.id;
@@ -2642,7 +2657,7 @@ async function trackOmni(interaction, statusEl, outEl, abbr){
     if (f.state === "ACTIVE"){
       const dl = `${GEMINI}/${fileId}:download?alt=media`;
       statusEl.textContent = `${short} :: DONE`;
-      showResult(outEl, dl, label, abbr, { video:true, previewUrl: blobUrl(dl) });
+      showResult(outEl, dl, label, abbr, input, { video:true, previewUrl: blobUrl(dl) });
       return;
     }
     await new Promise(r=> setTimeout(r, 4000));
@@ -2650,7 +2665,7 @@ async function trackOmni(interaction, statusEl, outEl, abbr){
   statusEl.textContent = `${short} :: timed out polling`;
 }
 
-function showResult(el, url, id, abbr, opts={}){
+function showResult(el, url, id, abbr, input, opts={}){
   const isVid = opts.video || /\.(mp4|webm|mov)(\?|$)/i.test(url);
   const preview = opts.previewUrl || url;    // key-gated downloads preview through /api/blob
   const c = document.createElement("div"); c.className="card"; c.style.marginTop="12px"; c.style.maxWidth="420px";
@@ -2668,12 +2683,12 @@ function showResult(el, url, id, abbr, opts={}){
   const save = async ()=>{
     b.disabled = true; b.textContent = "Saving...";
     if (srcDir && !postGen(isVid).length){
-      try { b.title = await srcSave(url, abbr, isVid); b.textContent = "Saved"; }
+      try { b.title = await srcSave(url, abbr, isVid, input); b.textContent = "Saved"; }
       catch(e){ b.textContent = "Retry save"; local("err", "save failed: " + e.message); }
       b.disabled = false;
       return;
     }
-    const r = await post("/api/save", { url, dir: outDir(), abbr, scripts: postGen(isVid), chain: pgChain(isVid) });
+    const r = await post("/api/save", { url, dir: outDir(), abbr, input, scripts: postGen(isVid), chain: pgChain(isVid) });
     b.disabled = false;
     if (r.path){ b.textContent = "Saved"; b.title = r.path; }
     else { b.textContent = "Retry save"; local("err", "save failed: " + (r.error||"?")); }
