@@ -30,13 +30,13 @@ def test_redact():
 def test_provider_routing():
     """Auth is picked by hostname. Sending a fal body with the Enhancor key - or the
     reverse - would leak one provider's credential to the other."""
-    assert server.is_fal("https://queue.fal.run/fal-ai/bria/expand")
+    assert server.is_fal("https://queue.fal.run/bria/fibo-edit-1.5/expand")
     assert server.is_fal("https://fal.run/bytedance/seedream/v5/pro/edit")
     assert not server.is_fal("https://apireq.enhancor.ai/api/kora/v1/queue")
     # a lookalike host must not match
     assert not server.is_fal("https://queue.fal.run.evil.example/x")
 
-    headers, _, secret = server.auth_for("https://queue.fal.run/fal-ai/bria/expand")
+    headers, _, secret = server.auth_for("https://queue.fal.run/bria/fibo-edit-1.5/expand")
     assert secret == "Authorization" and headers["Authorization"].startswith("Key ")
     assert "x-api-key" not in headers
 
@@ -173,16 +173,16 @@ def test_http_roundtrip():
     with urllib.request.urlopen(up2["local"], timeout=5) as r:
         assert r.read() == payload
 
-    # /api/blob hands a result URL's bytes to the page (Source-folder saves) - and only
-    # to the local page, through the tunnel it would be an open proxy.
-    with urllib.request.urlopen(base + "/api/blob?url=" + urllib.parse.quote(up["local"]),
-                                timeout=5) as r:
+    # /api/blob hands a result URL's bytes to the page (Source-folder saves). It is gated by
+    # this process's token - passed as ?k= because a <video>/<img> src cannot send a header -
+    # so an unauthenticated caller (anything over the tunnel included) is refused.
+    tok = urllib.parse.quote(server.LOCAL_TOKEN)
+    blob = base + "/api/blob?url=" + urllib.parse.quote(up["local"])
+    with urllib.request.urlopen(blob + "&k=" + tok, timeout=5) as r:
         assert r.read() == payload
-    req = urllib.request.Request(base + "/api/blob?url=" + urllib.parse.quote(up["local"]),
-                                 headers={"Host": "x-y.trycloudflare.com"})
     try:
-        urllib.request.urlopen(req, timeout=5)
-        assert False, "tunneled /api/blob must be refused"
+        urllib.request.urlopen(blob, timeout=5)   # same request, no token
+        assert False, "unauthenticated /api/blob must be refused"
     except urllib.error.HTTPError as e:
         assert e.code == 403, e.code
 
@@ -200,7 +200,7 @@ def test_http_roundtrip():
     # into a fal body - and with no FAL_KEY the call must abort rather than fall back
     # to the Enhancor key.
     body = {"image_url": "https://example.invalid/a.png", "canvas_size": [100, 100]}
-    res = post("/api/call", {"url": "https://queue.fal.run/fal-ai/bria/expand", "body": body})
+    res = post("/api/call", {"url": "https://queue.fal.run/bria/fibo-edit-1.5/expand", "body": body})
     assert res["webhookToken"] is None, res
     assert "webhookUrl" not in body and "webhook_url" not in body, body
 
