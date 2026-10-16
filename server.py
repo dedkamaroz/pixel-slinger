@@ -62,11 +62,13 @@ PIDFILE = ROOT / ".server.pid"
 _clients = []
 _clients_lock = threading.Lock()
 _tunnel_proc = None
+_tunnel_stop = threading.Event()
 
 
 def stop_tunnel():
     """Kill the tunnel so it can't outlive the server and keep uploads/ public."""
     global _tunnel_proc
+    _tunnel_stop.set()  # stop the ssh reconnect loop from respawning
     if _tunnel_proc and _tunnel_proc.poll() is None:
         _tunnel_proc.terminate()
         try:
@@ -89,6 +91,22 @@ def load_env(path=ROOT / ".env"):
         k, v = line.split("=", 1)
         env[k.strip()] = v.strip().strip('"').strip("'")
     return env
+
+
+# Reverse SSH tunnel to a VPS that serves uploads/ to the providers over HTTPS - this
+# replaces the cloudflared quick tunnel, which Cloudflare blocks from some VPN egress IPs
+# (e.g. Mullvad). Config comes from .env (machine-local) or the environment: with
+# TUNNEL_SSH_HOST set, the server holds an `ssh -R` to the VPS and hands providers the
+# https://<host> URL; left unset, it falls back to the cloudflared quick tunnel, so a
+# checkout on a machine that can reach Cloudflare keeps working untouched.
+def _tunnel_cfg(key, default=""):
+    return (os.environ.get(key) or load_env().get(key, default)).strip()
+
+
+TUNNEL_SSH_HOST = _tunnel_cfg("TUNNEL_SSH_HOST")
+TUNNEL_SSH_USER = _tunnel_cfg("TUNNEL_SSH_USER", "tunnel")
+TUNNEL_SSH_KEY = _tunnel_cfg("TUNNEL_SSH_KEY", str(Path.home() / ".ssh" / "vg_tunnel"))
+TUNNEL_REMOTE_PORT = int(_tunnel_cfg("TUNNEL_REMOTE_PORT", "8080"))
 
 
 def api_key():
@@ -226,12 +244,84 @@ def log(kind, text, meta=None):
         print(b if isinstance(b, str) else json.dumps(b, indent=2), flush=True)
 
 
-# --- cloudflared quick tunnel -------------------------------------------------
+# --- tunnel: reverse SSH to a VPS, or cloudflared fallback --------------------
 
 TUNNEL_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
+TUNNEL_KNOWN_HOSTS = str(ROOT / ".ssh_known_hosts")
 
 
 def start_tunnel():
+    """Open the public tunnel: reverse SSH to the VPS when configured, else cloudflared."""
+    if TUNNEL_SSH_HOST:
+        start_ssh_tunnel()
+    else:
+        start_cloudflared()
+
+
+def start_ssh_tunnel():
+    """Hold an `ssh -R` to the VPS so it serves uploads/ over HTTPS, reconnecting on drop.
+
+    IdentitiesOnly=yes is load-bearing: without it ssh offers other identities first, the
+    VPS rejects them, and the connection resets before our key is ever tried."""
+    exe = shutil.which("ssh")
+    if not exe:
+        STATE["tunnel"] = "missing"
+        log("warn", "ssh not found - uploads will not be reachable by providers.")
+        return
+    if not Path(TUNNEL_SSH_KEY).exists():
+        STATE["tunnel"] = "missing"
+        log("warn", f"tunnel key not found at {TUNNEL_SSH_KEY} - uploads will not be reachable.")
+        return
+    base = f"https://{TUNNEL_SSH_HOST}"
+    STATE["tunnel"] = "starting"
+    log("sys", f"opening ssh tunnel to {TUNNEL_SSH_HOST} ...")
+    atexit.register(stop_tunnel)
+
+    def run():
+        global _tunnel_proc
+        backoff = 2
+        while not _tunnel_stop.is_set():
+            proc = subprocess.Popen(
+                [exe, "-i", TUNNEL_SSH_KEY,
+                 "-o", "IdentitiesOnly=yes",
+                 "-o", f"UserKnownHostsFile={TUNNEL_KNOWN_HOSTS}",
+                 "-o", "StrictHostKeyChecking=accept-new",
+                 "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3",
+                 "-o", "ExitOnForwardFailure=yes", "-o", "BatchMode=yes",
+                 "-N", "-T",
+                 "-R", f"{TUNNEL_REMOTE_PORT}:127.0.0.1:{PORT}",
+                 f"{TUNNEL_SSH_USER}@{TUNNEL_SSH_HOST}"],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, encoding="utf-8", errors="replace", bufsize=1,
+            )
+            _tunnel_proc = proc
+            PIDFILE.write_text(json.dumps({"server": os.getpid(), "ssh": proc.pid}))
+
+            def mark_up(p=proc):
+                # ssh -N is silent on success; call it up once it survives a few seconds.
+                if _tunnel_stop.wait(4) or p.poll() is not None:
+                    return
+                STATE["public_base"], STATE["tunnel"] = base, "up"
+                log("sys", f"tunnel up: {base}")
+            threading.Thread(target=mark_up, daemon=True).start()
+
+            started = time.time()
+            out = [line.rstrip() for line in proc.stdout]
+            proc.wait()
+            if _tunnel_stop.is_set():
+                break
+            STATE["tunnel"], STATE["public_base"] = "down", ""
+            if time.time() - started > 10:
+                backoff = 2  # it was genuinely up for a while; this is a fresh drop
+            tail = "; ".join(l for l in out[-3:] if l)
+            log("warn", f"ssh tunnel dropped{(' - ' + tail) if tail else ''} - retrying in {backoff}s")
+            _tunnel_stop.wait(backoff)
+            backoff = min(backoff * 2, 30)
+
+    threading.Thread(target=run, daemon=True).start()
+
+
+def start_cloudflared():
     exe = shutil.which("cloudflared")
     if not exe:
         STATE["tunnel"] = "missing"
@@ -299,6 +389,22 @@ def retarget_files(body):
         return body
     return json.loads(STALE_FILES_RE.sub(
         lambda m: f"{public_base()}/files/", json.dumps(body)))
+
+
+def local_files_url(url):
+    """Rewrite one of our own /files/ URLs to loopback. The page holds the public tunnel URL
+    for a dropped file (that is what providers must fetch), but when *we* read it back - Gemini
+    prep inlining bytes, a preview, a save - fetching the public host sends the request out
+    through the tunnel and straight back to this server, which 502s whenever the tunnel is
+    mid-reconnect. Loopback is both cheaper and immune to tunnel state. Non-/files/ URLs (a
+    provider CDN, a key-gated result uri) are left untouched."""
+    try:
+        p = urllib.parse.urlsplit(url)
+    except ValueError:
+        return url
+    if p.path.startswith("/files/"):
+        return f"http://127.0.0.1:{PORT}/files/{os.path.basename(p.path)}"
+    return url
 
 
 # --- outbound API call --------------------------------------------------------
@@ -583,11 +689,13 @@ class Handler(BaseHTTPRequestHandler):
         send no CORS headers, so the page cannot fetch them itself. Token-gated: without it this
         is an open, cross-origin-readable proxy for any site the user happens to visit."""
         if not self._authed():
-            return self._json(403, {"error": "token required"})
+            return self._json(403, {"error": "stale session token - reload the page "
+                                             "(the server mints a new token each restart)"})
         url = urllib.parse.parse_qs(
             urllib.parse.urlsplit(self.path).query).get("url", [""])[0]
         if not url.startswith("http"):
             return self._json(400, {"error": "bad url"})
+        url = local_files_url(url)  # read our own uploads over loopback, not via the tunnel
         try:
             req = urllib.request.Request(url, headers=download_headers(url))
             with urllib.request.urlopen(req, timeout=180) as r:
@@ -776,10 +884,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def _save(self, data):
         if not self._authed():
-            return self._json(403, {"error": "token required"})
+            return self._json(403, {"error": "stale session token - reload the page "
+                                             "(the server mints a new token each restart)"})
         url = data.get("url", "")
         if not url.startswith("http"):
             return self._json(400, {"error": "bad url"})
+        url = local_files_url(url)  # a saved input re-read from our own uploads goes via loopback
         OUTPUTS.mkdir(exist_ok=True)
         dest_dir = self._dest_dir(data.get("dir"))
         # Fetched before the name is settled: a signed result URL can carry no extension

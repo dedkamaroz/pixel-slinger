@@ -9,3 +9,8 @@ d.html
 cloudflared.exe
 temp/
 .serena/
+.ssh_known_hosts
+tunnel/
+cf.log
+url.txt
+.claude/

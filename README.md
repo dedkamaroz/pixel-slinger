@@ -74,26 +74,31 @@ The long version, if you would rather do it by hand:
    the others still work. A call to a provider whose key is absent is refused before it leaves
    the machine rather than being sent with the wrong credential.
 
-2. Install cloudflared so the providers' servers can fetch your dropped files. `setup.bat`
-   drops `cloudflared.exe` in this folder, which needs no admin and no package manager; the
-   installed alternatives are:
+2. Make your dropped files reachable by the providers' servers. By default the server starts a
+   free **cloudflared quick tunnel** (random hostname, no account, no login). `setup.bat` drops
+   `cloudflared.exe` in this folder; alternatives:
    ```
-   scoop install cloudflared          # no admin needed - this is what's installed here
-   choco install cloudflared          # alternative, needs an elevated shell
+   scoop install cloudflared          # no admin needed
    winget install --id Cloudflare.cloudflared
    ```
-   The server starts a free quick tunnel on launch (no account, no login). The TUNNEL badge in
-   the header goes green and the log prints the public hostname.
+   Optionally, set `TUNNEL_SSH_HOST` in `.env` to route instead via a reverse SSH tunnel to your
+   own VPS (which serves the files over HTTPS at a fixed hostname) - useful if Cloudflare blocks
+   the tunnel edge from your network, as it does from some VPN egress IPs. That setting lives in
+   the gitignored `.env`, so it only affects the machine that sets it; everyone else keeps using
+   cloudflared.
 
+   The TUNNEL badge in the header goes green and the log prints the public base once connected.
    Without a working tunnel, uploads still work locally but no provider can reach the URL, and
    every job fails on their side - fal with a download error, Kling with `Something went wrong
    when we tried to get the contents of the file`, BytePlus with a fetch failure.
 
 ## The tunnel
 
-`cloudflared` opens a quick tunnel to the local server at startup. The hostname is random and
-**changes every restart** - fine, the proxy rewrites the input URLs per request. If cloudflared
-exits, the badge goes red; restart with `start.bat`.
+By default the server opens a `cloudflared` quick tunnel at startup; its hostname is random and
+**changes every restart** - the proxy rewrites the input URLs per request. Set `TUNNEL_SSH_HOST`
+in `.env` to instead hold a reverse SSH tunnel to your own VPS at a fixed `https://<host>`,
+reconnecting automatically if it drops; because that lives in the gitignored `.env`, the choice
+is per-machine. Either way, if the tunnel drops the badge goes red; restart with `start.bat`.
 
 ## Why a tunnel is needed
 
