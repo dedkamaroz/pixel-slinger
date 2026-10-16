@@ -62,7 +62,7 @@ const SERVICES = eval(html.slice(html.indexOf("const AREAS"), html.indexOf("cons
 const withPrompt = Object.entries(SERVICES)
   .filter(([, s]) => s.fields.some(([n, t]) => n === "prompt" && t === "textarea"))
   .map(([id]) => id);
-["seedream5edit", "briaexpand", "imgeditor", "kora", "seedance", "seedance25",
+["seedream5edit", "flux3edit", "fiboexpand", "imgeditor", "kora", "seedance", "seedance25",
  "minimax", "seedmini", "klingv3", "seedance15fal", "kling26fal", "kling25tfal",
  "k30", "k30omni", "ko1", "k26", "k25t"]
   .forEach(id => assert(withPrompt.includes(id), `${id} should get the prompt library`));

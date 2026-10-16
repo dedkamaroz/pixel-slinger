@@ -51,11 +51,44 @@ assert(!names(sd).includes("seed"), "fal's seedream schema has no seed - do not 
 assert.deepStrictEqual(sd.results({ images: [{ url: "a" }, { url: "b" }] }), ["a", "b"]);
 assert.deepStrictEqual(sd.results({}), [], "a response with no images yields no saves");
 
-// --- Bria Expand -------------------------------------------------------------
-const br = SERVICES.briaexpand;
-assert.strictEqual(br.fal, "fal-ai/bria/expand", "endpoint id must match fal's");
-["image_url", "prompt", "negative_prompt", "seed", "aspect_ratio"]
-  .forEach(f => assert(names(br).includes(f), `bria is missing ${f}`));
+// --- FLUX 3 Edit -------------------------------------------------------------
+const fx = SERVICES.flux3edit;
+assert.strictEqual(fx.fal, "blackforestlabs/flux-3/edit-image", "endpoint id must match fal's");
+// Every input fal's OpenAPI lists must be reachable (sync_mode excluded on purpose, as above).
+["image_urls", "prompt", "aspect_ratio", "resolution", "safety_tolerance",
+ "enable_prompt_expansion", "output_format"]
+  .forEach(f => assert(names(fx).includes(f), `flux 3 edit is missing ${f}`));
+assert(!names(fx).includes("sync_mode"), "sync_mode stays off the image editors");
+// version is a const "latest" in fal's schema - the one legal value and the default - so the
+// form must not offer a control that could only ever send something invalid.
+assert(!names(fx).includes("version"), "version is const latest - do not expose it");
+// safety_tolerance is a 0-4 integer, so it rides a numeric select, not a free number box
+// that would accept 2.5 or 9 and 422 at the API.
+const stol = fx.fields.find(f => f[0] === "safety_tolerance");
+assert.strictEqual(stol[1], "select", "safety_tolerance must be a select, not a number");
+assert.deepStrictEqual(stol[3].opts, [0, 1, 2, 3, 4]);
+assert.strictEqual(stol[3].num, true, "its options must cast back to numbers for fal");
+const fxDef = n => fx.fields.find(f => f[0] === n)[3].def;
+assert.strictEqual(fxDef("resolution"), "1k");
+assert.strictEqual(fxDef("aspect_ratio"), "auto");
+// matches the images[] output shape, same as Seedream edit.
+assert.deepStrictEqual(fx.results({ images: [{ url: "a" }, { url: "b" }] }), ["a", "b"]);
+assert.deepStrictEqual(fx.results({}), []);
+
+// --- Bria FIBO Expand 1.5 ----------------------------------------------------
+const br = SERVICES.fiboexpand;
+assert.strictEqual(br.fal, "bria/fibo-edit-1.5/expand", "endpoint id must match fal's");
+["image_url", "prompt", "seed", "aspect_ratio",
+ "retain_original_quality", "preserve_alpha", "return_model_output"]
+  .forEach(f => assert(names(br).includes(f), `fibo expand is missing ${f}`));
+// fibo-1.5 refuses any request that includes negative_prompt, so the form must not offer one.
+assert(!names(br).includes("negative_prompt"), "fibo-1.5 rejects negative_prompt - do not offer it");
+
+// Every select's default has to be one of its own options, or the field renders blank - on
+// both new image tabs, so a later field with a stray default fails here rather than silently.
+[fx, br].forEach(svc => svc.fields.forEach(([n, t, , o]) => {
+  if (t === "select") assert(o.opts.includes(o.def), `${svc.title}: ${n} default is not an option`);
+}));
 
 b = { image_url: "u", canvas_w: 1200, canvas_h: 800 };
 br.shape(b);
@@ -172,12 +205,12 @@ assert.strictEqual(spec(k25, "negative_prompt")[3].def, "blur, distort, and low 
 
 // --- transport separation ----------------------------------------------------
 // A fal tab carrying `base` would queue the fal body against Enhancor with the wrong key.
-[sd, br].forEach(s => assert(!s.base, `${s.title} must not define base`));
-// Five transports now, still exactly one each: fal, Enhancor (base), BytePlus (ark), Kling,
-// QwenCloud (qwen / qwenImage).
+[sd, fx, br].forEach(s => assert(!s.base, `${s.title} must not define base`));
+// Every service rides exactly one transport: fal, Enhancor (base), BytePlus (ark/arkImage),
+// Kling, QwenCloud (qwen/qwenImage), or Gemini (veo/omni).
 Object.entries(SERVICES).forEach(([id, s]) =>
-  assert([s.fal, s.base, s.ark, s.arkImage, s.kling, s.qwen, s.qwenImage].filter(Boolean).length === 1,
-    `${id} must have exactly one of fal/base/ark/arkImage/kling/qwen/qwenImage`));
+  assert([s.fal, s.base, s.ark, s.arkImage, s.kling, s.qwen, s.qwenImage, s.veo, s.omni].filter(Boolean).length === 1,
+    `${id} must have exactly one of fal/base/ark/arkImage/kling/qwen/qwenImage/veo/omni`));
 
 // --- nav wiring --------------------------------------------------------------
 // A nav id with no matching service latches the switch and renders an empty pane - no
@@ -194,10 +227,12 @@ Object.entries(PUBLISHERS).forEach(([pid, p]) => p.models.forEach(([id, label]) 
 // Reachable = a nav id, or a model on a page some nav id opens.
 const reachable = new Set(GROUPS.flatMap(g => g.items.flatMap(([id]) =>
   PUBLISHERS[id] ? PUBLISHERS[id].models.map(([m]) => m) : [id])));
-["seedance15fal", "kling26fal", "kling25tfal"].forEach(id =>
+["seedance15fal", "kling26fal", "kling25tfal",
+ "flux3edit", "fiboexpand", "seedream5edit"].forEach(id =>
   assert(reachable.has(id), `${id} is not reachable from the nav`));
-// All three fal tabs sit behind the one fal page - that is the point of consolidating them -
-// and a first visit opens on Kling 2.5 Turbo.
+// The three fal video tabs sit behind the one fal video page - a first visit opens on Kling 2.5 Turbo.
 assert.deepStrictEqual(PUBLISHERS.pubFal.models.map(m => m[0]), ["kling25tfal", "seedance15fal", "kling26fal"]);
+// The fal image editors sit behind their own page in the image group - a first visit opens on FLUX 3 Edit.
+assert.deepStrictEqual(PUBLISHERS.pubFalImage.models.map(m => m[0]), ["flux3edit", "fiboexpand", "seedream5edit"]);
 
 console.log("ok - fal field shaping");

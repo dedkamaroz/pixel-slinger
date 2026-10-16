@@ -1485,9 +1485,31 @@ const SERVICES = {
         hint:"turning it off needs account authorisation - unauthorised requests are checked anyway"}],
     ]
   },
-  briaexpand: {
-    title: "Bria Expand (fal.ai)", fal: "fal-ai/bria/expand",
-    abbr: "brex",
+  flux3edit: {
+    title: "FLUX 3 Edit (fal.ai)", fal: "blackforestlabs/flux-3/edit-image",
+    abbr: "fx3e",
+    results: j => (j.images || []).map(i => i.url).filter(Boolean),
+    fields: [
+      ["image_urls","files","Reference images",{hint:"required - up to 10, ordered image 1-10; min 256px/side, over 4 MP is downscaled"}],
+      ["prompt","textarea","Prompt",{def:"",rows:4,hint:"required - the edit instruction"}],
+      ["aspect_ratio","select","Aspect ratio",{
+        opts:["auto","21:9","2:1","16:9","3:2","7:5","4:3","5:4","1:1","4:5","3:4","5:7","2:3","9:16","1:2"], def:"auto",
+        hint:"auto takes the aspect ratio from the first reference image"}],
+      ["resolution","select","Resolution",{opts:["512sq","768sq","1k","2k","4k"],def:"1k",hint:"4k can take several minutes"}],
+      ["safety_tolerance","select","Safety tolerance",{opts:[0,1,2,3,4],num:true,def:2,hint:"0 strictest, 4 most permissive"}],
+      ["enable_prompt_expansion","bool","Prompt expansion",{def:false,hint:"LLM rewrite that keeps intent and reference roles"}],
+      ["output_format","select","Output format",{opts:["jpeg","png"],def:"jpeg"}],
+      // version is omitted: fal's OpenAPI pins it to const "latest" (the only legal value and
+      // the server default), so a control for it could only ever send an invalid value.
+    ]
+  },
+  // Bria FIBO Edit 1.5 Expand, replacing the earlier Bria Expand. The six placement fields
+  // are assembled into the three [w,h] / [x,y] pairs fal wants by shape(); fit() pre-fills
+  // them off the measured source. negative_prompt is intentionally absent - fibo-1.5 refuses
+  // any request that carries it.
+  fiboexpand: {
+    title: "Bria FIBO Expand 1.5 (fal.ai)", fal: "bria/fibo-edit-1.5/expand",
+    abbr: "fibx",
     results: j => j.image && j.image.url ? [j.image.url] : [],
     // Auto-fit the source as it lands. The source's long side is measured against the
     // canvas side of the same orientation: over 3/4 of it and the canvas becomes 4k in the
@@ -1504,7 +1526,7 @@ const SERVICES = {
       s.orig_x = Math.round((s.canvas_w - s.orig_w)/2);
       s.orig_y = Math.round((s.canvas_h - s.orig_h)/2);
     },
-    // Bria takes three [x,y] pairs; the form asks for the six numbers separately so each
+    // Bria takes three [x,y]/[w,h] pairs; the form asks for the six numbers separately so each
     // one gets its own label and range. A pair is only sent when both halves are filled.
     shape: b => {
       // Each pair is all-or-nothing: half a pair would serialise as [1200,null] and fal
@@ -1516,7 +1538,7 @@ const SERVICES = {
     },
     fields: [
       ["image_url","file","Source image",{hint:"required"}],
-      ["canvas_w","number","Canvas width",{def:1080,min:1,max:5000,hint:"required - canvas area must stay under 5000x5000"}],
+      ["canvas_w","number","Canvas width",{def:1080,min:1,max:5000,hint:"required - canvas area 25 MP or less (max 5000x5000)"}],
       ["canvas_h","number","Canvas height",{def:1920,min:1,max:5000,hint:"required"}],
       ["aspect_ratio","select","Aspect ratio",{
         opts:["","1:1","2:3","3:2","3:4","4:3","4:5","5:4","9:16","16:9"], def:"",
@@ -1524,11 +1546,13 @@ const SERVICES = {
       ["orig_w","number","Original width",{def:"",min:1,max:5000,
         hint:"optional - size of the source inside the canvas. Keep the subject above 15% of canvas area"}],
       ["orig_h","number","Original height",{def:"",min:1,max:5000,hint:"optional - pairs with original width"}],
-      ["orig_x","number","Original X",{def:"",hint:"optional - upper-left corner of the source; may sit outside the canvas"}],
+      ["orig_x","number","Original X",{def:"",hint:"optional - upper-left corner of the source; may sit outside the canvas (source is cropped)"}],
       ["orig_y","number","Original Y",{def:"",hint:"optional - pairs with original X"}],
-      ["prompt","textarea","Prompt",{def:"",rows:3,hint:"optional - English only, no special characters"}],
-      ["negative_prompt","text","Negative prompt",{def:"",hint:"optional"}],
+      ["prompt","textarea","Prompt",{def:"",rows:3,hint:"optional - describe what fills the new area; omit to just extend"}],
       ["seed","number","Seed",{def:"",min:0,max:2147483647,hint:"optional - blank is random; reuse a seed to reproduce a result"}],
+      ["retain_original_quality","bool","Retain original quality",{def:true,hint:"keeps the source pixels at full resolution; off gives a uniformly soft result"}],
+      ["preserve_alpha","bool","Preserve alpha",{def:true,hint:"keeps input transparency by extending edges outward; off flattens to RGB"}],
+      ["return_model_output","bool","Return model output",{def:false,hint:"diagnostic - also returns the pre-composite frame"}],
     ]
   },
   // Both video endpoints below return {video:{url}}, and duration is a *string* enum in
@@ -1821,6 +1845,13 @@ const PUBLISHERS = {
     sub:"queue.fal.run",
     models:[["kling25tfal","Kling 2.5 Turbo i2v"], ["seedance15fal","Seedance 1.5 Pro i2v"],
             ["kling26fal","Kling 2.6 Pro i2v"]] },
+  // The image-group twin of pubFal (video). Group placement, not the models, is what makes
+  // this page show the image post-gen row - so it holds the fal.ai image editors only.
+  pubFalImage: {
+    brand:"fal", name:"fal", tail:".ai",
+    sub:"image editing &middot; queue.fal.run",
+    models:[["flux3edit","FLUX 3 Edit"], ["fiboexpand","Bria FIBO Expand 1.5"],
+            ["seedream5edit","Seedream 5 Pro Edit"]] },
   // One publisher, two pages: an image page in the image group and a video page in the video
   // group, because the post-gen script row a page shows is decided by the group it sits in.
   pubQwenImage: {
@@ -1843,7 +1874,7 @@ const ALL_GROUPS = [
   { label:"IMAGE EDITORS", code:"CH-01", tag:"INDEX / 01", items:[
       ["pubQwenImage","QwenCloud Qwen-Image"],
       ["sd5pro","Dola-Seedream-5.0-pro"],
-      ["seedream5edit","Seedream 5 Pro Edit"], ["briaexpand","Bria Expand"],
+      ["pubFalImage","fal.ai"],
       ["imgeditor","Image Editor F/A"], ["kora","Kora"], ["general","Upscale"], ["detailed","Detailed"] ] },
   { label:"PORTRAIT ENHANCORS", code:"CH-02", tag:"INDEX / 02", items:[
       ["skin","Skin"], ["portrait","Portrait"] ] },
@@ -1944,6 +1975,7 @@ function renderPublisher(pid){
   const pick = document.createElement("div"); pick.className = "pub-pick";
   const lab = document.createElement("label"); lab.textContent = "Model";
   const sel = document.createElement("select");
+  sel.id = "pubsel-" + pid; lab.htmlFor = sel.id;   // associate the label with the dropdown
   sel.innerHTML = p.models.map(([id,label])=> `<option value="${id}">${esc(label)}</option>`).join("");
   // Last model used on this page, or their newest. A remembered id that no longer exists
   // (a model dropped from the list) falls back rather than rendering an empty page.
@@ -2268,6 +2300,13 @@ function renderService(id, state){
       i.oninput = ()=> state[name] = numOrBlank(type, i.value);
       cell.appendChild(i);
     }
+    // The visible label is a sibling <div>, never associated with the control, so give each
+    // control the label as its accessible name - otherwise a screen reader announces a bare
+    // combobox / checkbox / edit-text. One pass covers every field type and every tab.
+    const aname = String(label).replace(/<[^>]*>/g, "").trim();
+    cell.querySelectorAll("input,select,textarea").forEach(el=>{
+      if (!el.getAttribute("aria-label")) el.setAttribute("aria-label", aname);
+    });
     row.appendChild(cell);
     grid.appendChild(row);
   });

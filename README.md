@@ -140,8 +140,7 @@ models inside; picking one latches that switch and loads its form.
 |---|---|---|
 | QwenCloud Qwen-Image | QwenCloud | publisher page: `qwen-image-3.0-pro` on `/multimodal-generation/generation` - text to image, or edit with 1-3 reference images, 1-6 outputs, synchronous |
 | Dola-Seedream-5.0-pro | BytePlus | `/images/generations`, model `dola-seedream-5-0-pro-260628` - up to 10 reference images, synchronous |
-| Seedream 5 Pro Edit | fal.ai | `bytedance/seedream/v5/pro/edit` - up to 10 reference images, 1-6 outputs |
-| Bria Expand | fal.ai | `fal-ai/bria/expand` - outpaint onto a larger canvas |
+| fal.ai | fal.ai | publisher page: FLUX 3 Edit (`blackforestlabs/flux-3/edit-image`, opens here, up to 10 reference images), Bria FIBO Expand 1.5 (`bria/fibo-edit-1.5/expand`, outpaint onto a larger canvas), Seedream 5 Pro Edit (`bytedance/seedream/v5/pro/edit`, up to 10 reference images, 1-6 outputs) |
 
 **Video Generators** - four publisher pages, each with its own model drop-down.
 
