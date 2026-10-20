@@ -410,14 +410,19 @@ def local_files_url(url):
     for a dropped file (that is what providers must fetch), but when *we* read it back - Gemini
     prep inlining bytes, a preview, a save - fetching the public host sends the request out
     through the tunnel and straight back to this server, which 502s whenever the tunnel is
-    mid-reconnect. Loopback is both cheaper and immune to tunnel state. Non-/files/ URLs (a
-    provider CDN, a key-gated result uri) are left untouched."""
+    mid-reconnect. Loopback is both cheaper and immune to tunnel state.
+
+    Scoped to files that actually sit in uploads/: provider CDNs serve results from their own
+    /files/ paths too (fal.media is https://v3.fal.media/files/<slug>/<name>), so matching the
+    path alone redirected every fal result to a loopback file that was never there and 404'd the
+    save. The upload basename is uuid/token-prefixed, so a real provider file cannot collide."""
     try:
         p = urllib.parse.urlsplit(url)
     except ValueError:
         return url
-    if p.path.startswith("/files/"):
-        return f"http://127.0.0.1:{PORT}/files/{os.path.basename(p.path)}"
+    name = os.path.basename(p.path)
+    if p.path.startswith("/files/") and name and (UPLOADS / name).is_file():
+        return f"http://127.0.0.1:{PORT}/files/{name}"
     return url
 
 
