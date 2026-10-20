@@ -41,6 +41,7 @@ const chips = SERVICES.seedream5edit.fields.find(f => f[0] === "image_size")[3];
 const dola  = SERVICES.sd5pro.fields.find(f => f[0] === "size")[3];
 assert.strictEqual(chips.opts, dola.opts, "both tabs read the one size table");
 assert.strictEqual(chips.def, "1152x2048"); assert.strictEqual(dola.def, "1152x2048");
+assert.strictEqual(sd.fields.find(f => f[0] === "output_format")[3].def, "jpeg");
 
 // fal's OpenAPI has no seed on either Seedream v5 Pro endpoint (checked 20/08/2026),
 // so the form must not grow one - a field that is silently dropped would read as a
@@ -69,8 +70,10 @@ assert.strictEqual(stol[1], "select", "safety_tolerance must be a select, not a 
 assert.deepStrictEqual(stol[3].opts, [0, 1, 2, 3, 4]);
 assert.strictEqual(stol[3].num, true, "its options must cast back to numbers for fal");
 const fxDef = n => fx.fields.find(f => f[0] === n)[3].def;
-assert.strictEqual(fxDef("resolution"), "1k");
+assert.strictEqual(fxDef("resolution"), "2k");
 assert.strictEqual(fxDef("aspect_ratio"), "auto");
+assert.strictEqual(fxDef("safety_tolerance"), 4);
+assert.strictEqual(fxDef("enable_prompt_expansion"), true);
 // matches the images[] output shape, same as Seedream edit.
 assert.deepStrictEqual(fx.results({ images: [{ url: "a" }, { url: "b" }] }), ["a", "b"]);
 assert.deepStrictEqual(fx.results({}), []);
@@ -117,46 +120,61 @@ assert(!("canvas_size" in b), "half a pair must never serialise as [n,null]");
 assert.deepStrictEqual(br.results({ image: { url: "z" }, seed: 1 }), ["z"]);
 assert.deepStrictEqual(br.results({}), []);
 
-// fit() fills the placement fields off the measured source. The source's long side is
-// measured against the canvas side of the same orientation: over 3/4 of it and the canvas
-// goes 4k in the source's orientation, otherwise it stays. Either way the source is scaled
-// to half the matching canvas side (a quarter of the area) and centred.
+// fit() fills the placement fields off the measured source. The canvas stays as set; the
+// source's largest side is scaled to 75% of the matching canvas side (width if wider, height
+// if taller), the other side follows the source's aspect ratio, and it is centred.
 const fit = (canvas, w, h) => { const b = { canvas_w: canvas[0], canvas_h: canvas[1] }; br.fit(b, w, h);
   return [b.canvas_w, b.canvas_h, b.orig_w, b.orig_h, b.orig_x, b.orig_y]; };
-assert.deepStrictEqual(fit([1080, 1920], 500, 1000), [1080, 1920, 480, 960, 300, 480],
-  "small portrait: canvas stays, source at half height, centred");
-assert.deepStrictEqual(fit([1080, 1920], 1080, 1920), [2160, 3840, 1080, 1920, 540, 960],
-  "portrait over 3/4 of the canvas: 2160x3840, half height, centred");
-assert.deepStrictEqual(fit([1080, 1920], 3000, 3000), [2160, 3840, 1920, 1920, 120, 960],
-  "square counts as portrait");
-assert.deepStrictEqual(fit([1080, 1920], 600, 400), [1080, 1920, 540, 360, 270, 780],
-  "small landscape on a portrait canvas: canvas stays, source at half width, centred");
-assert.deepStrictEqual(fit([1080, 1920], 1600, 900), [3840, 2160, 1920, 1080, 960, 540],
-  "landscape over 3/4 of the canvas width: 3840x2160, half width, centred");
-assert.deepStrictEqual(fit([3840, 2160], 1200, 2000), [2160, 3840, 1152, 1920, 504, 960],
-  "portrait onto a landscape canvas is measured against that canvas's height");
-assert.deepStrictEqual(fit([3840, 2160], 900, 1200), [3840, 2160, 810, 1080, 1515, 540],
-  "a portrait under 3/4 of a landscape canvas's height leaves it landscape");
+assert.deepStrictEqual(fit([1080, 1920], 500, 1000), [1080, 1920, 720, 1440, 180, 240],
+  "tall source: height is 75% of canvas height (1440), width follows, centred");
+assert.deepStrictEqual(fit([1080, 1920], 1080, 1920), [1080, 1920, 810, 1440, 135, 240],
+  "canvas-shaped source: still height 75% of the canvas, centred");
+assert.deepStrictEqual(fit([1080, 1920], 3000, 3000), [1080, 1920, 810, 810, 135, 555],
+  "square (w>=h): width is 75% of canvas width (810)");
+assert.deepStrictEqual(fit([1080, 1920], 600, 400), [1080, 1920, 810, 540, 135, 690],
+  "wide source on a portrait canvas: width 75% of canvas width, centred");
+assert.deepStrictEqual(fit([1080, 1920], 1600, 900), [1080, 1920, 810, 456, 135, 732],
+  "wide source: width 75% of canvas width, height follows the aspect ratio");
+assert.deepStrictEqual(fit([3840, 2160], 1200, 2000), [3840, 2160, 972, 1620, 1434, 270],
+  "tall source on a landscape canvas: height 75% of canvas height (1620), centred");
+assert.deepStrictEqual(fit([3840, 2160], 900, 1200), [3840, 2160, 1215, 1620, 1313, 270],
+  "tall source on a landscape canvas, measured against canvas height");
+
+// --- FLUX 2 Pro Outpaint -----------------------------------------------------
+const fo = SERVICES.fluxoutpaint;
+assert.strictEqual(fo.fal, "fal-ai/flux-2-pro/outpaint", "endpoint id must match fal's");
+["image_url", "expand_top", "expand_bottom", "expand_left", "expand_right",
+ "mode", "auto_crop", "enable_safety_checker", "output_format"]
+  .forEach(f => assert(names(fo).includes(f), `flux 2 outpaint is missing ${f}`));
+assert(!names(fo).includes("sync_mode"), "sync_mode stays off the image editors");
+assert.deepStrictEqual(fo.results({ images: [{ url: "a" }] }), ["a"]);
+assert.deepStrictEqual(fo.results({}), []);
+// fit() seats the source at 75% of the canvas on both axes, centred - each side expands by
+// 1/6 of that axis, so source / (source + 2*source/6) = 3/4.
+{ const b = {}; fo.fit(b, 3000, 1800);
+  assert.strictEqual(b.expand_left, 500); assert.strictEqual(b.expand_right, 500);
+  assert.strictEqual(b.expand_top, 300);  assert.strictEqual(b.expand_bottom, 300);
+  assert.strictEqual(3000 / (3000 + b.expand_left + b.expand_right), 0.75, "width at 75%");
+  assert.strictEqual(1800 / (1800 + b.expand_top + b.expand_bottom), 0.75, "height at 75%"); }
 
 // --- bria.ai image editors ---------------------------------------------------
 // All four are synchronous (sync:true is added in the dispatch, not the form) and read the
 // one result shape { result: { image_url } }. Endpoint ids must match the pasted routes.
-const bRel = SERVICES.briarelight, bExp = SERVICES.briaexpand,
+const bRel = SERVICES.briarelight,
       bEnh = SERVICES.briaenhance, bUp = SERVICES.briaupres;
 const bopt = (svc, name) => svc.fields.find(f => f[0] === name)[3];
 assert.strictEqual(bRel.bria, "relight");
-assert.strictEqual(bExp.bria, "expand");
 assert.strictEqual(bEnh.bria, "enhance");
 assert.strictEqual(bUp.bria, "increase_resolution");
 
 // Every one of them nests the URL at result.image_url and yields nothing on an empty body.
-[bRel, bExp, bEnh, bUp].forEach(svc => {
+[bRel, bEnh, bUp].forEach(svc => {
   assert.deepStrictEqual(svc.results({ result: { image_url: "z" }, request_id: "r" }), ["z"]);
   assert.deepStrictEqual(svc.results({}), [], `${svc.title}: no result means nothing to save`);
 });
 
 // Bria's image input field is `image` (URL or base64), not fal's `image_url`.
-[bRel, bExp, bEnh, bUp].forEach(svc =>
+[bRel, bEnh, bUp].forEach(svc =>
   assert(names(svc).includes("image"), `${svc.title} must take \`image\``));
 
 // relight's required fields both default to a real enum value. light_direction is marked
@@ -167,27 +185,17 @@ assert.strictEqual(bopt(bRel, "light_direction").def, "front");
 assert(!bopt(bRel, "light_direction").opts.includes(""), "direction is required - no blank option that the send loop would drop");
 
 // Every select default on every bria tab must be one of its own options, or it renders blank.
-[bRel, bExp, bEnh, bUp].forEach(svc => svc.fields.forEach(([n, t, , o]) => {
+[bRel, bEnh, bUp].forEach(svc => svc.fields.forEach(([n, t, , o]) => {
   if (t === "select") assert(o.opts.includes(o.def), `${svc.title}: ${n} default is not an option`);
 }));
-
-// Native expand reuses FIBO's flat-to-pair geometry against Bria's own key names.
-let bb = { image: "u", canvas_w: 1200, canvas_h: 800, orig_w: 600, orig_h: 400, orig_x: 0, orig_y: 0 };
-bExp.shape(bb);
-assert.deepStrictEqual(bb.canvas_size, [1200, 800]);
-assert.deepStrictEqual(bb.original_image_size, [600, 400]);
-assert.deepStrictEqual(bb.original_image_location, [0, 0], "0,0 is a real corner and must survive");
-["canvas_w", "canvas_h", "orig_w", "orig_h", "orig_x", "orig_y"].forEach(k =>
-  assert(!(k in bb), `${k} is form-only`));
-bb = { image: "u", canvas_w: 10, canvas_h: 10, orig_w: 5 };   // half a pair
-bExp.shape(bb);
-assert(!("original_image_size" in bb), "width without height must not be sent as [n,null]");
 
 // increase_resolution's multiplier is a numeric select (2 or 4), not a free number box.
 const incr = bopt(bUp, "desired_increase");
 assert.deepStrictEqual(incr.opts, [2, 4]);
 assert.strictEqual(incr.num, true, "the multiplier must cast back to a number for Bria");
 assert.strictEqual(incr.def, 2);
+// increase_resolution defaults to preserving the source colours.
+assert.strictEqual(bopt(bUp, "preserve_color").def, true);
 
 // --- bria.ai automotive v1 (sync, result at top-level url) -------------------
 const bRef = SERVICES.briareflections, bHar = SERVICES.briaharmonize;
@@ -312,6 +320,6 @@ const reachable = new Set(GROUPS.flatMap(g => g.items.flatMap(([id]) =>
 // The three fal video tabs sit behind the one fal video page - a first visit opens on Kling 2.5 Turbo.
 assert.deepStrictEqual(PUBLISHERS.pubFal.models.map(m => m[0]), ["kling25tfal", "seedance15fal", "kling26fal"]);
 // The fal image editors sit behind their own page in the image group - a first visit opens on FLUX 3 Edit.
-assert.deepStrictEqual(PUBLISHERS.pubFalImage.models.map(m => m[0]), ["flux3edit", "fiboexpand", "seedream5edit"]);
+assert.deepStrictEqual(PUBLISHERS.pubFalImage.models.map(m => m[0]), ["flux3edit", "fiboexpand", "fluxoutpaint", "seedream5edit"]);
 
 console.log("ok - fal field shaping");

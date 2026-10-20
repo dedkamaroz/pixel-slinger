@@ -1536,7 +1536,7 @@ const SERVICES = {
       ["image_size","sizepick","Aspect ratio / resolution",{def:"1152x2048", opts:SD5_SIZES,
         hint:"pick the shape, then the pixels - 4.2 MP is above fal's documented ceiling"}],
       ["num_images","number","Number of images",{def:1,min:1,max:6,hint:"separate generations from the one prompt"}],
-      ["output_format","select","Output format",{opts:["png","jpeg"],def:"png"}],
+      ["output_format","select","Output format",{opts:["png","jpeg"],def:"jpeg"}],
       ["enable_safety_checker","bool","Safety checker",{def:true,
         hint:"turning it off needs account authorisation - unauthorised requests are checked anyway"}],
     ]
@@ -1551,9 +1551,9 @@ const SERVICES = {
       ["aspect_ratio","select","Aspect ratio",{
         opts:["auto","21:9","2:1","16:9","3:2","7:5","4:3","5:4","1:1","4:5","3:4","5:7","2:3","9:16","1:2"], def:"auto",
         hint:"auto takes the aspect ratio from the first reference image"}],
-      ["resolution","select","Resolution",{opts:["512sq","768sq","1k","2k","4k"],def:"1k",hint:"4k can take several minutes"}],
-      ["safety_tolerance","select","Safety tolerance",{opts:[0,1,2,3,4],num:true,def:2,hint:"0 strictest, 4 most permissive"}],
-      ["enable_prompt_expansion","bool","Prompt expansion",{def:false,hint:"LLM rewrite that keeps intent and reference roles"}],
+      ["resolution","select","Resolution",{opts:["512sq","768sq","1k","2k","4k"],def:"2k",hint:"4k can take several minutes"}],
+      ["safety_tolerance","select","Safety tolerance",{opts:[0,1,2,3,4],num:true,def:4,hint:"0 strictest, 4 most permissive"}],
+      ["enable_prompt_expansion","bool","Prompt expansion",{def:true,hint:"LLM rewrite that keeps intent and reference roles"}],
       ["output_format","select","Output format",{opts:["jpeg","png"],def:"jpeg"}],
       // version is omitted: fal's OpenAPI pins it to const "latest" (the only legal value and
       // the server default), so a control for it could only ever send an invalid value.
@@ -1567,18 +1567,13 @@ const SERVICES = {
     title: "Bria FIBO Expand 1.5 (fal.ai)", fal: "bria/fibo-edit-1.5/expand",
     abbr: "fibx",
     results: j => j.image && j.image.url ? [j.image.url] : [],
-    // Auto-fit the source as it lands. The source's long side is measured against the
-    // canvas side of the same orientation: over 3/4 of it and the canvas becomes 4k in the
-    // source's orientation (2160x3840 portrait, 3840x2160 landscape), otherwise the canvas
-    // stays as set. Either way the source is scaled so its long side is half the matching
-    // canvas side (about a quarter of the area) and centred. Square counts as portrait.
+    // Auto-fit the source as it lands, against the canvas as set. The source's largest side
+    // is scaled to 75% of the matching canvas side (width if the source is wider, height if
+    // taller), the other side follows the source's aspect ratio, and the result is centred.
     fit: (s, w, h) => {
-      const portrait = h >= w;
-      if ((portrait ? h / s.canvas_h : w / s.canvas_w) > 0.75)
-        [s.canvas_w, s.canvas_h] = portrait ? [2160, 3840] : [3840, 2160];
-      const long = (portrait ? s.canvas_h : s.canvas_w) / 2;
-      s.orig_w = Math.round(portrait ? long * w / h : long);
-      s.orig_h = Math.round(portrait ? long : long * h / w);
+      const scale = w >= h ? s.canvas_w * 0.75 / w : s.canvas_h * 0.75 / h;
+      s.orig_w = Math.round(w * scale);
+      s.orig_h = Math.round(h * scale);
       s.orig_x = Math.round((s.canvas_w - s.orig_w)/2);
       s.orig_y = Math.round((s.canvas_h - s.orig_h)/2);
     },
@@ -1606,9 +1601,37 @@ const SERVICES = {
       ["orig_y","number","Original Y",{def:"",hint:"optional - pairs with original X"}],
       ["prompt","textarea","Prompt",{def:"",rows:3,hint:"optional - describe what fills the new area; omit to just extend"}],
       ["seed","number","Seed",{def:"",min:0,max:2147483647,hint:"optional - blank is random; reuse a seed to reproduce a result"}],
-      ["retain_original_quality","bool","Retain original quality",{def:true,hint:"keeps the source pixels at full resolution; off gives a uniformly soft result"}],
+      ["retain_original_quality","bool","Retain original quality",{def:false,hint:"keeps the source pixels at full resolution; off gives a uniformly soft result"}],
       ["preserve_alpha","bool","Preserve alpha",{def:true,hint:"keeps input transparency by extending edges outward; off flattens to RGB"}],
       ["return_model_output","bool","Return model output",{def:false,hint:"diagnostic - also returns the pre-composite frame"}],
+    ]
+  },
+  // FLUX 2 Pro outpaint - fal's own endpoint, not Bria. Pure outpaint: no prompt and no
+  // canvas geometry, just four per-side pixel margins the model fills contextually.
+  // sync_mode stays omitted for the same reason as the editors above (data URI breaks save).
+  fluxoutpaint: {
+    title: "FLUX 2 Pro Outpaint (fal.ai)", fal: "fal-ai/flux-2-pro/outpaint",
+    abbr: "fx2o",
+    results: j => (j.images || []).map(i => i.url).filter(Boolean),
+    // Auto-fit as the source lands. There is no canvas field here - the canvas is the source
+    // plus the four margins - so expanding each side by 1/6 of that axis seats the source at
+    // 75% of the canvas on both axes, centred (canvas keeps the source's aspect ratio). fal
+    // downscales the output to its 4.2 MP ceiling; 75% is a ratio, so it survives that.
+    fit: (s, w, h) => {
+      s.expand_left = s.expand_right = Math.round(w / 6);
+      s.expand_top  = s.expand_bottom = Math.round(h / 6);
+    },
+    fields: [
+      ["image_url","file","Source image",{hint:"required - the image to expand outward"}],
+      ["expand_top","number","Expand top (px)",{def:256,min:0,max:4096,hint:"pixels added above; 0 keeps that edge"}],
+      ["expand_bottom","number","Expand bottom (px)",{def:256,min:0,max:4096,hint:"pixels added below"}],
+      ["expand_left","number","Expand left (px)",{def:256,min:0,max:4096,hint:"pixels added to the left"}],
+      ["expand_right","number","Expand right (px)",{def:256,min:0,max:4096,hint:"pixels added to the right"}],
+      ["mode","select","Mode",{opts:["high","fast"],def:"high",
+        hint:"high is highest fidelity; fast is quicker and may be lower fidelity"}],
+      ["auto_crop","bool","Auto-crop",{def:false,hint:"crops the source when the expanded canvas can't fully contain it"}],
+      ["enable_safety_checker","bool","Safety checker",{def:true,hint:"turning it off needs account authorisation"}],
+      ["output_format","select","Output format",{opts:["jpeg","png"],def:"jpeg"}],
     ]
   },
 
@@ -1634,46 +1657,6 @@ const SERVICES = {
         hint:"required - where the light comes from"}],
     ]
   },
-  // Native twin of the fal fiboexpand tab above: the same canvas/placement geometry (Bria's
-  // own field names), so fit() pre-fills the placement off the measured source and shape()
-  // packs the six numbers into the three [w,h]/[x,y] pairs. aspect_ratio, when set, overrides.
-  briaexpand: {
-    title: "Expand (bria.ai)", bria: "expand", abbr: "bxp",
-    results: j => j.result && j.result.image_url ? [j.result.image_url] : [],
-    fit: (s, w, h) => {
-      const portrait = h >= w;
-      if ((portrait ? h / s.canvas_h : w / s.canvas_w) > 0.75)
-        [s.canvas_w, s.canvas_h] = portrait ? [2160, 3840] : [3840, 2160];
-      const long = (portrait ? s.canvas_h : s.canvas_w) / 2;
-      s.orig_w = Math.round(portrait ? long * w / h : long);
-      s.orig_h = Math.round(portrait ? long : long * h / w);
-      s.orig_x = Math.round((s.canvas_w - s.orig_w)/2);
-      s.orig_y = Math.round((s.canvas_h - s.orig_h)/2);
-    },
-    shape: b => {
-      if (b.canvas_w !== undefined && b.canvas_h !== undefined) b.canvas_size = [b.canvas_w, b.canvas_h];
-      if (b.orig_w !== undefined && b.orig_h !== undefined) b.original_image_size = [b.orig_w, b.orig_h];
-      if (b.orig_x !== undefined && b.orig_y !== undefined) b.original_image_location = [b.orig_x, b.orig_y];
-      ["canvas_w","canvas_h","orig_w","orig_h","orig_x","orig_y"].forEach(k => delete b[k]);
-    },
-    fields: [
-      ["image","file","Source image",{hint:"required"}],
-      ["canvas_w","number","Canvas width",{def:1080,min:1,max:5000,hint:"required - canvas area 25 MP or less (max 5000x5000)"}],
-      ["canvas_h","number","Canvas height",{def:1920,min:1,max:5000,hint:"required"}],
-      ["aspect_ratio","select","Aspect ratio",{
-        opts:["","1:1","2:3","3:2","3:4","4:3","4:5","5:4","9:16","16:9"], def:"",
-        hint:"optional - when set it overrides the placement fields below"}],
-      ["orig_w","number","Original width",{def:"",min:1,max:5000,
-        hint:"optional - size of the source inside the canvas. Keep the subject above 15% of canvas area"}],
-      ["orig_h","number","Original height",{def:"",min:1,max:5000,hint:"optional - pairs with original width"}],
-      ["orig_x","number","Original X",{def:"",hint:"optional - upper-left corner of the source; may sit outside the canvas (source is cropped)"}],
-      ["orig_y","number","Original Y",{def:"",hint:"optional - pairs with original X"}],
-      ["prompt","textarea","Prompt",{def:"",rows:3,hint:"optional - English only; omit to auto-describe the fill"}],
-      ["negative_prompt","text","Negative prompt",{def:"",hint:"optional - English only, no special characters"}],
-      ["seed","number","Seed",{def:"",min:0,max:2147483647,hint:"optional - blank is random; reuse a seed to reproduce a result"}],
-      ["preserve_alpha","bool","Preserve alpha",{def:true,hint:"keeps input transparency; off flattens to opaque"}],
-    ]
-  },
   briaenhance: {
     title: "Enhance (bria.ai)", bria: "enhance", abbr: "enh",
     results: j => j.result && j.result.image_url ? [j.result.image_url] : [],
@@ -1691,7 +1674,7 @@ const SERVICES = {
       ["image","file","Source image",{hint:"required - jpeg/png/webp, output up to 8192x8192"}],
       ["desired_increase","select","Resolution multiplier",{opts:[2,4],num:true,def:2,
         hint:"2x or 4x; output area capped at 8192x8192"}],
-      ["preserve_color","bool","Preserve colour",{def:false,hint:"keeps the output colours identical to the input"}],
+      ["preserve_color","bool","Preserve colour",{def:true,hint:"keeps the output colours identical to the input"}],
       ["preserve_alpha","bool","Preserve alpha",{def:true,hint:"keeps input transparency; off flattens to opaque"}],
     ]
   },
@@ -2029,12 +2012,12 @@ const PUBLISHERS = {
     brand:"fal", name:"fal", tail:".ai",
     sub:"image editing &middot; queue.fal.run",
     models:[["flux3edit","FLUX 3 Edit"], ["fiboexpand","Bria FIBO Expand 1.5"],
-            ["seedream5edit","Seedream 5 Pro Edit"]] },
+            ["fluxoutpaint","FLUX 2 Pro Outpaint"], ["seedream5edit","Seedream 5 Pro Edit"]] },
   // Bria's own API (not via fal). Sits in the image group so it gets the image post-gen row.
   pubBriaImage: {
     brand:"bria", name:"bria", tail:".ai",
     sub:"image editing &middot; engine.prod.bria-api.com",
-    models:[["briarelight","Relight"], ["briaexpand","Expand"], ["briaenhance","Enhance"],
+    models:[["briarelight","Relight"], ["briaenhance","Enhance"],
             ["briaupres","Increase Resolution"], ["briareflections","Vehicle Reflections"],
             ["briaharmonize","Vehicle Harmonize"]] },
   // One publisher, two pages: an image page in the image group and a video page in the video
