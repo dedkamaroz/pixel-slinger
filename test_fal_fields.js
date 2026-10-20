@@ -138,6 +138,85 @@ assert.deepStrictEqual(fit([3840, 2160], 1200, 2000), [2160, 3840, 1152, 1920, 5
 assert.deepStrictEqual(fit([3840, 2160], 900, 1200), [3840, 2160, 810, 1080, 1515, 540],
   "a portrait under 3/4 of a landscape canvas's height leaves it landscape");
 
+// --- bria.ai image editors ---------------------------------------------------
+// All four are synchronous (sync:true is added in the dispatch, not the form) and read the
+// one result shape { result: { image_url } }. Endpoint ids must match the pasted routes.
+const bRel = SERVICES.briarelight, bExp = SERVICES.briaexpand,
+      bEnh = SERVICES.briaenhance, bUp = SERVICES.briaupres;
+const bopt = (svc, name) => svc.fields.find(f => f[0] === name)[3];
+assert.strictEqual(bRel.bria, "relight");
+assert.strictEqual(bExp.bria, "expand");
+assert.strictEqual(bEnh.bria, "enhance");
+assert.strictEqual(bUp.bria, "increase_resolution");
+
+// Every one of them nests the URL at result.image_url and yields nothing on an empty body.
+[bRel, bExp, bEnh, bUp].forEach(svc => {
+  assert.deepStrictEqual(svc.results({ result: { image_url: "z" }, request_id: "r" }), ["z"]);
+  assert.deepStrictEqual(svc.results({}), [], `${svc.title}: no result means nothing to save`);
+});
+
+// Bria's image input field is `image` (URL or base64), not fal's `image_url`.
+[bRel, bExp, bEnh, bUp].forEach(svc =>
+  assert(names(svc).includes("image"), `${svc.title} must take \`image\``));
+
+// relight's required fields both default to a real enum value. light_direction is marked
+// optional in the OpenAPI but the live API 422s without it, so the form must always send one.
+assert.strictEqual(bopt(bRel, "light_type").def, "midday");
+assert(bopt(bRel, "light_type").opts.includes("midday"));
+assert.strictEqual(bopt(bRel, "light_direction").def, "front");
+assert(!bopt(bRel, "light_direction").opts.includes(""), "direction is required - no blank option that the send loop would drop");
+
+// Every select default on every bria tab must be one of its own options, or it renders blank.
+[bRel, bExp, bEnh, bUp].forEach(svc => svc.fields.forEach(([n, t, , o]) => {
+  if (t === "select") assert(o.opts.includes(o.def), `${svc.title}: ${n} default is not an option`);
+}));
+
+// Native expand reuses FIBO's flat-to-pair geometry against Bria's own key names.
+let bb = { image: "u", canvas_w: 1200, canvas_h: 800, orig_w: 600, orig_h: 400, orig_x: 0, orig_y: 0 };
+bExp.shape(bb);
+assert.deepStrictEqual(bb.canvas_size, [1200, 800]);
+assert.deepStrictEqual(bb.original_image_size, [600, 400]);
+assert.deepStrictEqual(bb.original_image_location, [0, 0], "0,0 is a real corner and must survive");
+["canvas_w", "canvas_h", "orig_w", "orig_h", "orig_x", "orig_y"].forEach(k =>
+  assert(!(k in bb), `${k} is form-only`));
+bb = { image: "u", canvas_w: 10, canvas_h: 10, orig_w: 5 };   // half a pair
+bExp.shape(bb);
+assert(!("original_image_size" in bb), "width without height must not be sent as [n,null]");
+
+// increase_resolution's multiplier is a numeric select (2 or 4), not a free number box.
+const incr = bopt(bUp, "desired_increase");
+assert.deepStrictEqual(incr.opts, [2, 4]);
+assert.strictEqual(incr.num, true, "the multiplier must cast back to a number for Bria");
+assert.strictEqual(incr.def, 2);
+
+// --- bria.ai automotive v1 (sync, result at top-level url) -------------------
+const bRef = SERVICES.briareflections, bHar = SERVICES.briaharmonize;
+assert.strictEqual(bRef.briav1, "generate_reflections");
+assert.strictEqual(bHar.briav1, "harmonize");
+// v1 result is a bare { url }, not { result: { image_url } }.
+assert.deepStrictEqual(bRef.results({ url: "u", seed: 1 }), ["u"]);
+assert.deepStrictEqual(bHar.results({ url: "u" }), ["u"]);
+[bRef, bHar].forEach(svc => assert.deepStrictEqual(svc.results({}), [], `${svc.title}: no url, nothing to save`));
+// v1 image field is image_url, not image.
+[bRef, bHar].forEach(svc => assert(names(svc).includes("image_url"), `${svc.title} must take image_url`));
+
+// reflections folds the five region fields into a `masks` object; blanks are dropped by the
+// send loop first, so only supplied regions appear, and the helper keys never leak through.
+let rb = { image_url: "u", windshield: "w.png", body: "b.png" };
+bRef.shape(rb);
+assert.deepStrictEqual(rb.masks, { windshield: "w.png", body: "b.png" });
+["windshield", "rear_window", "side_windows", "body", "wheels"].forEach(k =>
+  assert(!(k in rb), `${k} is form-only - it belongs inside masks`));
+rb = { image_url: "u" };            // no masks supplied
+bRef.shape(rb);
+assert(!("masks" in rb), "an empty masks object must not be sent");
+
+// harmonize's preset enum is space-form at the API ("cold day"), not the docs' hyphen form.
+const preset = bopt(bHar, "preset");
+assert.deepStrictEqual(preset.opts, ["warm day", "cold day", "warm night", "cold night"]);
+assert.strictEqual(preset.def, "warm day");
+assert(preset.opts.includes(preset.def), "preset default must be one of its options");
+
 // --- Seedance 1.5 Pro i2v / Kling 2.6 Pro i2v / Kling 2.5 Turbo i2v ----------
 // No shape() on any of them - they are flat. What can break instead is the duration field:
 // fal types it as a string enum on all three, so a "number" field would send 5 and 422.
@@ -207,10 +286,10 @@ assert.strictEqual(spec(k25, "negative_prompt")[3].def, "blur, distort, and low 
 // A fal tab carrying `base` would queue the fal body against Enhancor with the wrong key.
 [sd, fx, br].forEach(s => assert(!s.base, `${s.title} must not define base`));
 // Every service rides exactly one transport: fal, Enhancor (base), BytePlus (ark/arkImage),
-// Kling, QwenCloud (qwen/qwenImage), or Gemini (veo/omni).
+// Kling, QwenCloud (qwen/qwenImage), Gemini (veo/omni), or Bria.
 Object.entries(SERVICES).forEach(([id, s]) =>
-  assert([s.fal, s.base, s.ark, s.arkImage, s.kling, s.qwen, s.qwenImage, s.veo, s.omni].filter(Boolean).length === 1,
-    `${id} must have exactly one of fal/base/ark/arkImage/kling/qwen/qwenImage/veo/omni`));
+  assert([s.fal, s.base, s.ark, s.arkImage, s.kling, s.qwen, s.qwenImage, s.veo, s.omni, s.bria, s.briav1].filter(Boolean).length === 1,
+    `${id} must have exactly one of fal/base/ark/arkImage/kling/qwen/qwenImage/veo/omni/bria/briav1`));
 
 // --- nav wiring --------------------------------------------------------------
 // A nav id with no matching service latches the switch and renders an empty pane - no

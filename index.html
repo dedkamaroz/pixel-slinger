@@ -335,6 +335,7 @@
   .pub-fal      { --pub-a:#FFFFFF; --pub-b:#8E99A4; --pub-glow:rgba(255,255,255,.10); }
   .pub-qwen     { --pub-a:#7B61FF; --pub-b:#FF8A3D; --pub-glow:rgba(123,97,255,.20); }
   .pub-google   { --pub-a:#4285F4; --pub-b:#EA4335; --pub-glow:rgba(66,133,244,.20); }
+  .pub-bria     { --pub-a:#FF5C38; --pub-b:#FFB38A; --pub-glow:rgba(255,92,56,.18); }
 
   /* console */
   /* right-hand column, one third of the window - the form is the wide half */
@@ -406,6 +407,7 @@
       <span class="badge" id="b-kling">KLING KEY ?</span>
       <span class="badge" id="b-qwen">QWEN KEY ?</span>
       <span class="badge" id="b-gemini">GEMINI KEY ?</span>
+      <span class="badge" id="b-bria">BRIA KEY ?</span>
       <span class="badge" id="b-tun">TUNNEL ?</span>
     </span>
   </div>
@@ -467,6 +469,13 @@ const QWEN = "https://dashscope-intl.aliyuncs.com/api/v1";
 // Google's Gemini API: Veo posts to /models/{id}:predictLongRunning, Omni to /interactions,
 // and the operation/files polls and the key-gated result downloads all hang off this base.
 const GEMINI = "https://generativelanguage.googleapis.com/v1beta";
+// Bria's v2 image editors. Each model is a route under this base. Submit returns
+// {request_id, status_url}; trackBria polls the status, which carries result.image_url on
+// COMPLETED. All routes are async (enhance accepts nothing else), so none sends sync:true.
+const BRIA = "https://engine.prod.bria-api.com/v2/image/edit";
+// Bria's v1 automotive routes are a different shape: synchronous, result at top-level `url`
+// (not result.image_url), image field named image_url (not image). `briav1` marks them.
+const BRIA_V1 = "https://engine.prod.bria-api.com/v1/product/vehicle";
 // Per-session token for the local-only endpoints (/api/blob, /api/save). page_html() swaps the
 // placeholder for the real token when it serves the page; off-disk it stays literal and unused.
 const LOCAL_TOKEN = "__LOCAL_TOKEN__";
@@ -539,7 +548,7 @@ async function refreshConfig(){
   const k = document.getElementById("b-key"), t = document.getElementById("b-tun"),
         f = document.getElementById("b-fal"), a = document.getElementById("b-ark"),
         kl = document.getElementById("b-kling"), qw = document.getElementById("b-qwen"),
-        gm = document.getElementById("b-gemini");
+        gm = document.getElementById("b-gemini"), br = document.getElementById("b-bria");
   // With Enhancor off, its key is not a fault worth flagging - hide the badge entirely.
   k.style.display = ENHANCOR_ON ? "" : "none";
   k.textContent = CFG.hasKey ? "ENHANCOR KEY "+CFG.keyHint : "ENHANCOR KEY MISSING";
@@ -554,6 +563,8 @@ async function refreshConfig(){
   qw.className = "badge " + (CFG.hasQwenKey ? "ok" : "bad");
   gm.textContent = CFG.hasGeminiKey ? "GEMINI KEY "+CFG.geminiKeyHint : "GEMINI KEY MISSING";
   gm.className = "badge " + (CFG.hasGeminiKey ? "ok" : "bad");
+  br.textContent = CFG.hasBriaKey ? "BRIA KEY "+CFG.briaKeyHint : "BRIA KEY MISSING";
+  br.className = "badge " + (CFG.hasBriaKey ? "ok" : "bad");
   pgBuild(CFG.postgenVideo || [], CFG.postgenImage || [], CFG.maxPostgen || 3);
   t.textContent = "TUNNEL " + CFG.tunnel.toUpperCase();
   t.className = "badge " + ({up:"ok", starting:"warn", missing:"bad", down:"bad", off:"warn"}[CFG.tunnel] || "");
@@ -1175,7 +1186,52 @@ const wanVideos = {
   wan30prime: wanVideo("wan3.0-video-prime", {title:"Wan3.0-Video-Prime - same inputs, faster, double the price", abbr:"wan30p"}),
 };
 
+// 2.1-Pro and 2.1-Turbo share one API shape and form: the same multimodal-generation
+// endpoint and envelope as 3.0-pro, but no negative_prompt (the 3.0 series only, per the
+// API reference) and up to 10 reference images instead of 3. The drop-down tells the two
+// apart, so the form is shared - the wanVideo prime/non-prime pattern.
+const qwenImage21 = (model, o) => ({
+  title: `${o.title} - text to image / image edit`,
+  qwenImage: "/services/aigc/multimodal-generation/generation",
+  model, abbr: o.abbr,
+  shape: b => {
+    if (b.size) b.size = String(b.size).replace("x", "*");
+    if ((b.image || []).length && b.prompt_extend_mode === "agent") b.prompt_extend_mode = "direct";
+    qwenShape(QWEN_IMG_PARAMS, b => ({
+      messages: [{ role: "user",
+        content: [{ text: b.prompt || "" }, ...(b.image || []).map(url => ({ image: url }))] }],
+    }))(b);
+  },
+  results: j => ((j.output || {}).choices || [])
+    .flatMap(c => ((c.message || {}).content || []).map(p => p.image)).filter(Boolean),
+  fields: [
+    ["prompt","textarea","Prompt",{def:"",rows:4,
+      hint:"required - up to 4,500 tokens. Renders text down to 10px, so long layouts (menus, "
+         + "storyboards, forms) can be described in full"}],
+    ["image","files","Reference images",{
+      hint:"optional - 1 to 10, addressed as Image 1, Image 2... in the prompt. Any image here "
+         + "switches the model from text-to-image into edit. jpg/png/bmp/tiff/webp/gif, max 10 MB each"}],
+    ["size","sizepick","Aspect ratio / resolution",{def:"1152x2048", opts:QWEN_SIZES,
+      hint:"pick the shape, then the tier - left tier bills as 1k, right as 2k. Blank lets the model pick"}],
+    ["n","number","Number of images",{def:1,min:1,max:6,hint:"separate generations from the one prompt"}],
+    ["prompt_extend","bool","Prompt rewrite",{def:false,rerender:true,
+      hint:"LLM rewrite of the prompt before generation - their default is on, ours is off"}],
+    ["prompt_extend_mode","select","Rewrite mode",{opts:["direct","agent"],def:"direct",
+      when: s => s.prompt_extend !== false,
+      hint:"agent plans the layout first - text-to-image only, falls back to direct once a reference image is set"}],
+    ["enable_thinking","bool","Thinking",{def:true, when: s => s.prompt_extend !== false,
+      hint:"reasoning pass before rendering - only offered while prompt rewrite is on, which it requires"}],
+    ["seed","number","Seed",{def:"",min:0,max:2147483647,hint:"optional - blank is random"}],
+    ["watermark","bool","Watermark",{def:false}],
+  ],
+});
+const qwenImages21 = {
+  qwenimg21pro:   qwenImage21("qwen-image-2.1-pro",   {title:"Qwen-Image-2.1-Pro",   abbr:"qi21p"}),
+  qwenimg21turbo: qwenImage21("qwen-image-2.1-turbo", {title:"Qwen-Image-2.1-Turbo", abbr:"qi21t"}),
+};
+
 const qwenModels = {
+  ...qwenImages21,
   qwenimg30pro: {
     title: "Qwen-Image-3.0-Pro - text to image / image edit",
     qwenImage: "/services/aigc/multimodal-generation/generation",
@@ -1555,6 +1611,128 @@ const SERVICES = {
       ["return_model_output","bool","Return model output",{def:false,hint:"diagnostic - also returns the pre-composite frame"}],
     ]
   },
+
+  // --- bria.ai -------------------------------------------------------------
+  // `bria` instead of `base`/`fal` posts to engine.prod.bria-api.com with api_token auth.
+  // The submit returns {request_id, status_url}; trackBria polls status for result.image_url.
+  // `image` takes the dropped file's public URL, same as fal's image_url. results() reads the
+  // status/sync shape { result: { image_url } }, which is identical on all four routes.
+  briarelight: {
+    title: "Relight (bria.ai)", bria: "relight", abbr: "rlt",
+    results: j => j.result && j.result.image_url ? [j.result.image_url] : [],
+    fields: [
+      ["image","file","Source image",{hint:"required - URL or dropped file; jpeg/png/webp"}],
+      ["light_type","select","Light type",{
+        opts:["midday","blue hour light","low-angle sunlight","sunrise light",
+              "spotlight on subject, keep background settings","overcast light",
+              "soft overcast daylight lighting","cloud-filtered lighting","fog-diffused lighting",
+              "moonlight lighting","starlight lighting nighttime","soft bokeh lighting",
+              "harsh studio lighting keep background setting"],
+        def:"midday", hint:"required - the lighting setup to apply"}],
+      // Required despite the schema marking it optional - the API 422s without it.
+      ["light_direction","select","Light direction",{opts:["front","side","bottom","top-down"],def:"front",
+        hint:"required - where the light comes from"}],
+    ]
+  },
+  // Native twin of the fal fiboexpand tab above: the same canvas/placement geometry (Bria's
+  // own field names), so fit() pre-fills the placement off the measured source and shape()
+  // packs the six numbers into the three [w,h]/[x,y] pairs. aspect_ratio, when set, overrides.
+  briaexpand: {
+    title: "Expand (bria.ai)", bria: "expand", abbr: "bxp",
+    results: j => j.result && j.result.image_url ? [j.result.image_url] : [],
+    fit: (s, w, h) => {
+      const portrait = h >= w;
+      if ((portrait ? h / s.canvas_h : w / s.canvas_w) > 0.75)
+        [s.canvas_w, s.canvas_h] = portrait ? [2160, 3840] : [3840, 2160];
+      const long = (portrait ? s.canvas_h : s.canvas_w) / 2;
+      s.orig_w = Math.round(portrait ? long * w / h : long);
+      s.orig_h = Math.round(portrait ? long : long * h / w);
+      s.orig_x = Math.round((s.canvas_w - s.orig_w)/2);
+      s.orig_y = Math.round((s.canvas_h - s.orig_h)/2);
+    },
+    shape: b => {
+      if (b.canvas_w !== undefined && b.canvas_h !== undefined) b.canvas_size = [b.canvas_w, b.canvas_h];
+      if (b.orig_w !== undefined && b.orig_h !== undefined) b.original_image_size = [b.orig_w, b.orig_h];
+      if (b.orig_x !== undefined && b.orig_y !== undefined) b.original_image_location = [b.orig_x, b.orig_y];
+      ["canvas_w","canvas_h","orig_w","orig_h","orig_x","orig_y"].forEach(k => delete b[k]);
+    },
+    fields: [
+      ["image","file","Source image",{hint:"required"}],
+      ["canvas_w","number","Canvas width",{def:1080,min:1,max:5000,hint:"required - canvas area 25 MP or less (max 5000x5000)"}],
+      ["canvas_h","number","Canvas height",{def:1920,min:1,max:5000,hint:"required"}],
+      ["aspect_ratio","select","Aspect ratio",{
+        opts:["","1:1","2:3","3:2","3:4","4:3","4:5","5:4","9:16","16:9"], def:"",
+        hint:"optional - when set it overrides the placement fields below"}],
+      ["orig_w","number","Original width",{def:"",min:1,max:5000,
+        hint:"optional - size of the source inside the canvas. Keep the subject above 15% of canvas area"}],
+      ["orig_h","number","Original height",{def:"",min:1,max:5000,hint:"optional - pairs with original width"}],
+      ["orig_x","number","Original X",{def:"",hint:"optional - upper-left corner of the source; may sit outside the canvas (source is cropped)"}],
+      ["orig_y","number","Original Y",{def:"",hint:"optional - pairs with original X"}],
+      ["prompt","textarea","Prompt",{def:"",rows:3,hint:"optional - English only; omit to auto-describe the fill"}],
+      ["negative_prompt","text","Negative prompt",{def:"",hint:"optional - English only, no special characters"}],
+      ["seed","number","Seed",{def:"",min:0,max:2147483647,hint:"optional - blank is random; reuse a seed to reproduce a result"}],
+      ["preserve_alpha","bool","Preserve alpha",{def:true,hint:"keeps input transparency; off flattens to opaque"}],
+    ]
+  },
+  briaenhance: {
+    title: "Enhance (bria.ai)", bria: "enhance", abbr: "enh",
+    results: j => j.result && j.result.image_url ? [j.result.image_url] : [],
+    fields: [
+      ["image","file","Source image",{hint:"required - jpeg/png/webp"}],
+      ["seed","number","Seed",{def:"",min:0,max:2147483647,hint:"optional - blank is random; reuse a seed to reproduce a result"}],
+      ["preserve_alpha","bool","Preserve alpha",{def:true,hint:"keeps input transparency; off flattens to opaque"}],
+    ]
+  },
+  // Pure upscale - preserves content, adds no detail (unlike Enhance). Max output 8192x8192.
+  briaupres: {
+    title: "Increase Resolution (bria.ai)", bria: "increase_resolution", abbr: "ures",
+    results: j => j.result && j.result.image_url ? [j.result.image_url] : [],
+    fields: [
+      ["image","file","Source image",{hint:"required - jpeg/png/webp, output up to 8192x8192"}],
+      ["desired_increase","select","Resolution multiplier",{opts:[2,4],num:true,def:2,
+        hint:"2x or 4x; output area capped at 8192x8192"}],
+      ["preserve_color","bool","Preserve colour",{def:false,hint:"keeps the output colours identical to the input"}],
+      ["preserve_alpha","bool","Preserve alpha",{def:true,hint:"keeps input transparency; off flattens to opaque"}],
+    ]
+  },
+
+  // --- bria.ai automotive (v1) ---------------------------------------------
+  // `briav1` posts to the v1 product/vehicle base (api_token auth, same host). These are
+  // synchronous and return the result at top-level `url`, so they ride the sync image branch
+  // rather than trackBria. The image field is image_url here, not image.
+  // Reflections needs per-region binary masks: the five accepted regions each get a file
+  // field, assembled into the `masks` object by shape(). Masks come from the segment route
+  // or are supplied by hand; the endpoint 500s with none.
+  briareflections: {
+    title: "Vehicle Reflections (bria.ai)", briav1: "generate_reflections", abbr: "vrfl",
+    results: j => j.url ? [j.url] : [],
+    shape: b => {
+      const m = {};
+      ["windshield","rear_window","side_windows","body","wheels"].forEach(k => {
+        if (b[k] !== undefined){ m[k] = b[k]; delete b[k]; }
+      });
+      if (Object.keys(m).length) b.masks = m;
+    },
+    fields: [
+      ["image_url","file","Vehicle shot",{hint:"required - jpeg/png/webp, max 12 MB"}],
+      ["windshield","file","Mask: windshield",{hint:"optional - binary PNG mask for this region"}],
+      ["rear_window","file","Mask: rear window",{hint:"optional - binary PNG mask"}],
+      ["side_windows","file","Mask: side windows",{hint:"optional - binary PNG mask"}],
+      ["body","file","Mask: body",{hint:"optional - binary PNG mask"}],
+      ["wheels","file","Mask: wheels",{hint:"optional - binary PNG mask. Supply at least one mask or the API errors"}],
+      ["seed","number","Seed",{def:"",min:0,max:2147483647,hint:"optional - blank is random; reuse a seed to reproduce a result"}],
+    ]
+  },
+  briaharmonize: {
+    title: "Vehicle Harmonize (bria.ai)", briav1: "harmonize", abbr: "vhrm",
+    results: j => j.url ? [j.url] : [],
+    // Presets are space-separated at the API ("cold day"), not hyphenated as the docs show.
+    fields: [
+      ["image_url","file","Vehicle shot",{hint:"required - jpeg/png/webp"}],
+      ["preset","select","Lighting preset",{opts:["warm day","cold day","warm night","cold night"],def:"warm day",
+        hint:"harmonises the vehicle's lighting to the chosen scene"}],
+    ]
+  },
   // Both video endpoints below return {video:{url}}, and duration is a *string* enum in
   // fal's schema, not an integer - a number field would 422. Endpoint ids and enums read
   // off fal's OpenAPI document on 16/08/2026.
@@ -1852,12 +2030,20 @@ const PUBLISHERS = {
     sub:"image editing &middot; queue.fal.run",
     models:[["flux3edit","FLUX 3 Edit"], ["fiboexpand","Bria FIBO Expand 1.5"],
             ["seedream5edit","Seedream 5 Pro Edit"]] },
+  // Bria's own API (not via fal). Sits in the image group so it gets the image post-gen row.
+  pubBriaImage: {
+    brand:"bria", name:"bria", tail:".ai",
+    sub:"image editing &middot; engine.prod.bria-api.com",
+    models:[["briarelight","Relight"], ["briaexpand","Expand"], ["briaenhance","Enhance"],
+            ["briaupres","Increase Resolution"], ["briareflections","Vehicle Reflections"],
+            ["briaharmonize","Vehicle Harmonize"]] },
   // One publisher, two pages: an image page in the image group and a video page in the video
   // group, because the post-gen script row a page shows is decided by the group it sits in.
   pubQwenImage: {
     brand:"qwen", name:"QWEN", tail:"CLOUD",
     sub:"Qwen-Image &middot; dashscope-intl.aliyuncs.com",
-    models:[["qwenimg30pro","Qwen-Image-3.0-Pro"]] },
+    models:[["qwenimg30pro","Qwen-Image-3.0-Pro"], ["qwenimg21pro","Qwen-Image-2.1-Pro"],
+            ["qwenimg21turbo","Qwen-Image-2.1-Turbo"]] },
   pubQwenVideo: {
     brand:"qwen", name:"QWEN", tail:"CLOUD",
     sub:"Wan-Video &middot; dashscope-intl.aliyuncs.com",
@@ -1875,6 +2061,7 @@ const ALL_GROUPS = [
       ["pubQwenImage","QwenCloud Qwen-Image"],
       ["sd5pro","Dola-Seedream-5.0-pro"],
       ["pubFalImage","fal.ai"],
+      ["pubBriaImage","bria.ai"],
       ["imgeditor","Image Editor F/A"], ["kora","Kora"], ["general","Upscale"], ["detailed","Detailed"] ] },
   { label:"PORTRAIT ENHANCORS", code:"CH-02", tag:"INDEX / 02", items:[
       ["skin","Skin"], ["portrait","Portrait"] ] },
@@ -2384,6 +2571,10 @@ function renderService(id, state){
     const omniUrl = svc.omni && GEMINI + svc.omni;
     const r = svc.fal
       ? await callApi(`https://queue.fal.run/${svc.fal}`, body, { autoWebhook:false })
+      : svc.bria
+      ? await callApi(`${BRIA}/${svc.bria}`, body, { autoWebhook:false })
+      : svc.briav1
+      ? await callApi(`${BRIA_V1}/${svc.briav1}`, body, { autoWebhook:false })
       : veoUrl
       ? await callApi(veoUrl, body, { autoWebhook:false })
       : omniUrl
@@ -2411,16 +2602,17 @@ function renderService(id, state){
       trackVeo(op, status, out, abbr, input); return;
     }
     if (svc.omni){ status.textContent = "generating..."; trackOmni(j, status, out, abbr, input); return; }
-    // Image generation on ModelArk and QwenCloud is synchronous - this one response
-    // carries the results.
-    if (svc.arkImage || svc.qwenImage){
+    // Synchronous image paths: ModelArk, QwenCloud, and Bria's v1 automotive routes all
+    // carry the result in this one response (Bria v1 at top-level url, via results()).
+    if (svc.arkImage || svc.qwenImage || svc.briav1){
       const urls = svc.results(j);
+      const who = svc.model || svc.briav1;
       if (!urls.length){
         status.className = "note bad"; status.textContent = "no image in the response";
-        local("err", `${svc.model} returned no image: ${(r.text||"").slice(0,300)}`); return;
+        local("err", `${who} returned no image: ${(r.text||"").slice(0,300)}`); return;
       }
       status.className = "note"; status.textContent = `DONE (${urls.length})`;
-      urls.forEach(u => showResult(out, u, svc.model, abbr, input));
+      urls.forEach(u => showResult(out, u, who, abbr, input));
       return;
     }
     // Kling's and QwenCloud's top-level request_id names the HTTP call, not the job - the
@@ -2431,6 +2623,7 @@ function renderService(id, state){
     status.className = "note"; status.textContent = `request ${rid||"?"} queued`;
     if (!rid) return;
     if (svc.fal) trackFal(svc, j, status, out, abbr, input);
+    else if (svc.bria) trackBria(svc, j, status, out, abbr, input);
     else if (svc.kling) trackKling(rid, status, out, abbr, input);
     else if (svc.qwen) trackQwen(rid, status, out, abbr, input);
     else if (svc.ark) trackArk(svc, rid, status, out, abbr, input);
@@ -2508,6 +2701,37 @@ async function trackFal(svc, sub, statusEl, outEl, abbr, input){
     return;
   }
   statusEl.textContent = `${sub.request_id} :: timed out polling`;
+}
+
+/* ---------- bria polling ---------- */
+// Submit returns {request_id, status_url}; the status GET (api_token added by the proxy)
+// carries result.image_url inline on COMPLETED - no separate response fetch, unlike fal.
+// Every route is async; some also accept sync, but one async path keeps them uniform.
+async function trackBria(svc, sub, statusEl, outEl, abbr, input){
+  const id = sub.request_id || "?";
+  for (let i=0; i<150; i++){
+    await new Promise(r=> setTimeout(r, 4000));
+    const s = await callApi(sub.status_url, null, { method:"GET", autoWebhook:false });
+    if (s.status >= 400 || s.status === 0){
+      statusEl.className = "note bad"; statusEl.textContent = `${id} :: polling failed (${s.status})`; return;
+    }
+    const j = s.json || {};
+    statusEl.textContent = `${id} :: ${j.status || s.status}`;
+    if (["ERROR","FAILED"].includes(j.status)){
+      statusEl.className = "note bad";
+      local("err", `${id} ${j.status}: ${(s.text||"").slice(0,300)}`); return;
+    }
+    if (j.status !== "COMPLETED") continue;
+    const urls = svc.results(j);
+    if (!urls.length){
+      statusEl.className = "note bad"; statusEl.textContent = `${id} :: completed with no image URL`;
+      local("err", `${id} completed but carried no image: ${(s.text||"").slice(0,300)}`); return;
+    }
+    statusEl.textContent = `${id} :: DONE (${urls.length})`;
+    urls.forEach(u => showResult(outEl, u, id, abbr, input));
+    return;
+  }
+  statusEl.textContent = `${id} :: timed out polling`;
 }
 
 /* ---------- BytePlus polling ---------- */

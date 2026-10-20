@@ -133,6 +133,10 @@ def gemini_key():
     return load_env().get("GEMINI_API_KEY", "").strip()
 
 
+def bria_key():
+    return load_env().get("BRIA_API_KEY", "").strip()
+
+
 # fal's queue also answers on fal.run for the sync path; both take the same header.
 FAL_HOSTS = ("queue.fal.run", "fal.run")
 
@@ -149,6 +153,8 @@ QWEN_HOST = "dashscope-intl.aliyuncs.com"
 # Veo (predictLongRunning), Omni (Interactions API), the operation/files polls and the
 # auth-gated result downloads all live on this one host.
 GEMINI_HOST = "generativelanguage.googleapis.com"
+# Bria's v2 image-edit routes and the /v2/status poll, both api_token-authed on this host.
+BRIA_HOST = "engine.prod.bria-api.com"
 
 
 def _host(url):
@@ -179,6 +185,10 @@ def is_gemini(url):
     return _host(url) == GEMINI_HOST
 
 
+def is_bria(url):
+    return _host(url) == BRIA_HOST
+
+
 def download_headers(url):
     """Auth for fetching a result file. Only Gemini gates downloads behind the API key;
     every other provider hands back a public CDN URL that needs no header. The key only
@@ -190,7 +200,8 @@ def download_headers(url):
 def key_var(url):
     return ("FAL_KEY" if is_fal(url) else "BYTEPLUS_API_KEY" if is_ark(url)
             else "KLINGAI_API_KEY" if is_kling(url) else "QWENCLOUD_API_KEY" if is_qwen(url)
-            else "GEMINI_API_KEY" if is_gemini(url) else "ENHANCOR_API_KEY")
+            else "GEMINI_API_KEY" if is_gemini(url) else "BRIA_API_KEY" if is_bria(url)
+            else "ENHANCOR_API_KEY")
 
 
 def auth_for(url):
@@ -210,6 +221,9 @@ def auth_for(url):
     if is_gemini(url):
         key = gemini_key()
         return {"Content-Type": "application/json", "x-goog-api-key": key}, key, "x-goog-api-key"
+    if is_bria(url):
+        key = bria_key()
+        return {"Content-Type": "application/json", "api_token": key}, key, "api_token"
     key = api_key()
     return {"Content-Type": "application/json", "x-api-key": key}, key, "x-api-key"
 
@@ -632,7 +646,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/config":
             key, fkey, akey, kkey, qkey = api_key(), fal_key(), ark_key(), kling_key(), qwen_key()
-            gkey = gemini_key()
+            gkey, bkey = gemini_key(), bria_key()
             hint = lambda k: (k[:4] + "..." + k[-4:]) if len(k) > 8 else ""
             return self._json(200, {
                 "hasKey": bool(key),
@@ -647,6 +661,8 @@ class Handler(BaseHTTPRequestHandler):
                 "klingKeyHint": hint(kkey),
                 "hasQwenKey": bool(qkey),
                 "qwenKeyHint": hint(qkey),
+                "hasBriaKey": bool(bkey),
+                "briaKeyHint": hint(bkey),
                 # Read per request, so editing .env shows up in the drop-downs on the
                 # next poll without restarting the server.
                 "postgenVideo": [{"key": x["key"], "label": x["label"]}
@@ -954,7 +970,8 @@ def main():
     print(f"  fal key:      {'set' if fal_key() else 'MISSING - add FAL_KEY to .env'}")
     print(f"  byteplus key: {'set' if ark_key() else 'MISSING - add BYTEPLUS_API_KEY to .env'}")
     print(f"  kling key:    {'set' if kling_key() else 'MISSING - add KLINGAI_API_KEY to .env'}")
-    print(f"  qwen key:     {'set' if qwen_key() else 'MISSING - add QWENCLOUD_API_KEY to .env'}\n")
+    print(f"  qwen key:     {'set' if qwen_key() else 'MISSING - add QWENCLOUD_API_KEY to .env'}")
+    print(f"  bria key:     {'set' if bria_key() else 'MISSING - add BRIA_API_KEY to .env'}\n")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
