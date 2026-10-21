@@ -336,6 +336,7 @@
   .pub-qwen     { --pub-a:#7B61FF; --pub-b:#FF8A3D; --pub-glow:rgba(123,97,255,.20); }
   .pub-google   { --pub-a:#4285F4; --pub-b:#EA4335; --pub-glow:rgba(66,133,244,.20); }
   .pub-bria     { --pub-a:#FF5C38; --pub-b:#FFB38A; --pub-glow:rgba(255,92,56,.18); }
+  .pub-bfl      { --pub-a:#E8E8E8; --pub-b:#6B7280; --pub-glow:rgba(232,232,232,.10); }
 
   /* console */
   /* right-hand column, one third of the window - the form is the wide half */
@@ -408,6 +409,7 @@
       <span class="badge" id="b-qwen">QWEN KEY ?</span>
       <span class="badge" id="b-gemini">GEMINI KEY ?</span>
       <span class="badge" id="b-bria">BRIA KEY ?</span>
+      <span class="badge" id="b-bfl">BFL KEY ?</span>
       <span class="badge" id="b-tun">TUNNEL ?</span>
     </span>
   </div>
@@ -476,6 +478,9 @@ const BRIA = "https://engine.prod.bria-api.com/v2/image/edit";
 // Bria's v1 automotive routes are a different shape: synchronous, result at top-level `url`
 // (not result.image_url), image field named image_url (not image). `briav1` marks them.
 const BRIA_V1 = "https://engine.prod.bria-api.com/v1/product/vehicle";
+// Black Forest Labs' own FLUX API. Each model is a route under this base; submit returns
+// {id, polling_url} and trackBfl polls that URL for result.sample (see the bfl.ai models).
+const BFL = "https://api.bfl.ai/v1";
 // Per-session token for the local-only endpoints (/api/blob, /api/save). page_html() swaps the
 // placeholder for the real token when it serves the page; off-disk it stays literal and unused.
 const LOCAL_TOKEN = "__LOCAL_TOKEN__";
@@ -548,7 +553,8 @@ async function refreshConfig(){
   const k = document.getElementById("b-key"), t = document.getElementById("b-tun"),
         f = document.getElementById("b-fal"), a = document.getElementById("b-ark"),
         kl = document.getElementById("b-kling"), qw = document.getElementById("b-qwen"),
-        gm = document.getElementById("b-gemini"), br = document.getElementById("b-bria");
+        gm = document.getElementById("b-gemini"), br = document.getElementById("b-bria"),
+        fl = document.getElementById("b-bfl");
   // With Enhancor off, its key is not a fault worth flagging - hide the badge entirely.
   k.style.display = ENHANCOR_ON ? "" : "none";
   k.textContent = CFG.hasKey ? "ENHANCOR KEY "+CFG.keyHint : "ENHANCOR KEY MISSING";
@@ -565,6 +571,8 @@ async function refreshConfig(){
   gm.className = "badge " + (CFG.hasGeminiKey ? "ok" : "bad");
   br.textContent = CFG.hasBriaKey ? "BRIA KEY "+CFG.briaKeyHint : "BRIA KEY MISSING";
   br.className = "badge " + (CFG.hasBriaKey ? "ok" : "bad");
+  fl.textContent = CFG.hasBflKey ? "BFL KEY "+CFG.bflKeyHint : "BFL KEY MISSING";
+  fl.className = "badge " + (CFG.hasBflKey ? "ok" : "bad");
   pgBuild(CFG.postgenVideo || [], CFG.postgenImage || [], CFG.maxPostgen || 3);
   t.textContent = "TUNNEL " + CFG.tunnel.toUpperCase();
   t.className = "badge " + ({up:"ok", starting:"warn", missing:"bad", down:"bad", off:"warn"}[CFG.tunnel] || "");
@@ -1330,6 +1338,11 @@ async function omniPrep(b){
     const x = await geminiBytes(u); return { type: "image", data: x.b64, mime_type: x.mime };
   }));
 }
+// bfl's Expand route takes `image` as raw base64 only (unlike Kontext, which also accepts a
+// URL), so pull the uploaded file back and inline it - reusing the same fetch->base64 helper.
+async function bflExpandPrep(b){
+  if (b.image) b.image = (await geminiBytes(b.image)).b64;
+}
 
 // Veo has no explicit task field: image-to-video is whenever any image / frame / reference /
 // extend input is present. People then must be allow_adult (text-to-video takes allow_all) -
@@ -1716,6 +1729,56 @@ const SERVICES = {
         hint:"harmonises the vehicle's lighting to the chosen scene"}],
     ]
   },
+  // --- bfl.ai (Black Forest Labs) ------------------------------------------
+  // `bfl` instead of `base`/`fal` posts to api.bfl.ai/v1 with x-key auth. Submit returns
+  // {id, polling_url}; trackBfl polls that URL for result.sample on status "Ready". Fields
+  // and ranges are from bfl's own API reference (read 21/10/2026).
+  // Kontext's input_image takes "base64 OR URL", so it rides the app's normal uploaded-URL
+  // path. Expand's image is base64-only, so bflExpandPrep inlines it before the send.
+  bflkontext: {
+    title: "FLUX.1 Kontext [pro] (bfl.ai)", bfl: "flux-kontext-pro", abbr: "kntx",
+    results: j => j.result && j.result.sample ? [j.result.sample] : [],
+    fields: [
+      ["input_image","file","Source image",{hint:"required here - the image to edit (base64 or URL)"}],
+      ["prompt","textarea","Prompt",{def:"",rows:4,hint:"required - the edit instruction"}],
+      ["aspect_ratio","select","Aspect ratio",{
+        opts:["","21:9","16:9","3:2","4:3","1:1","3:4","2:3","9:16","9:21"], def:"",
+        hint:"optional - blank keeps the source aspect ratio (allowed 21:9 to 9:21)"}],
+      ["prompt_upsampling","bool","Prompt upsampling",{def:false,hint:"rewrites the prompt for more creative output"}],
+      ["output_format","select","Output format",{opts:["png","jpeg","webp"],def:"png"}],
+      ["safety_tolerance","select","Safety tolerance",{opts:[0,1,2,3,4,5,6],num:true,def:2,hint:"0 strictest, 6 most permissive"}],
+      ["seed","number","Seed",{def:"",min:0,max:4294967295,hint:"optional - blank is random; reuse a seed to reproduce a result"}],
+    ]
+  },
+  // FLUX.1 Expand [pro] - bfl's native outpaint, the bfl.ai twin of the fal FLUX 2 Pro
+  // Outpaint tab: four per-side pixel margins (0-2048) the model fills. bfl has no FLUX.2
+  // outpaint of its own, so this 1.0 Expand route is the closest same-shape equivalent.
+  bflexpand: {
+    title: "FLUX.1 Expand [pro] (bfl.ai)", bfl: "flux-pro-1.0-expand", abbr: "bxpd",
+    results: j => j.result && j.result.sample ? [j.result.sample] : [],
+    prep: bflExpandPrep,
+    // Same auto-fit as the fal outpaint tab: expand each side by 1/6 of its axis so the
+    // source seats at 75% of the canvas, centred (capped at bfl's 2048px-per-side ceiling).
+    fit: (s, w, h) => {
+      s.top = s.bottom = Math.min(2048, Math.round(h / 6));
+      s.left = s.right = Math.min(2048, Math.round(w / 6));
+    },
+    fields: [
+      ["image","file","Source image",{hint:"required - the image to expand outward"}],
+      ["top","number","Expand top (px)",{def:256,min:0,max:2048,hint:"pixels added above; 0 keeps that edge"}],
+      ["bottom","number","Expand bottom (px)",{def:256,min:0,max:2048,hint:"pixels added below"}],
+      ["left","number","Expand left (px)",{def:256,min:0,max:2048,hint:"pixels added to the left"}],
+      ["right","number","Expand right (px)",{def:256,min:0,max:2048,hint:"pixels added to the right"}],
+      ["prompt","textarea","Prompt",{def:"",rows:3,hint:"optional - describe what fills the new area; omit to just extend"}],
+      ["steps","number","Steps",{def:50,min:15,max:50,hint:"15-50; more steps is slower, higher fidelity"}],
+      ["guidance","number","Guidance",{def:60,min:1.5,max:100,hint:"1.5-100; how closely to follow the prompt"}],
+      ["prompt_upsampling","bool","Prompt upsampling",{def:false,hint:"rewrites the prompt for more creative output"}],
+      ["output_format","select","Output format",{opts:["jpeg","png","webp"],def:"jpeg"}],
+      ["safety_tolerance","select","Safety tolerance",{opts:[0,1,2,3,4,5,6],num:true,def:2,hint:"0 strictest, 6 most permissive"}],
+      ["seed","number","Seed",{def:"",min:0,max:4294967295,hint:"optional - blank is random; reuse a seed to reproduce a result"}],
+    ]
+  },
+
   // Both video endpoints below return {video:{url}}, and duration is a *string* enum in
   // fal's schema, not an integer - a number field would 422. Endpoint ids and enums read
   // off fal's OpenAPI document on 16/08/2026.
@@ -2020,6 +2083,11 @@ const PUBLISHERS = {
     models:[["briarelight","Relight"], ["briaenhance","Enhance"],
             ["briaupres","Increase Resolution"], ["briareflections","Vehicle Reflections"],
             ["briaharmonize","Vehicle Harmonize"]] },
+  // Black Forest Labs' own FLUX API (not via fal). Image group, for the image post-gen row.
+  pubBflImage: {
+    brand:"bfl", name:"bfl", tail:".ai",
+    sub:"image editing &middot; api.bfl.ai",
+    models:[["bflkontext","FLUX.1 Kontext [pro]"], ["bflexpand","FLUX.1 Expand [pro]"]] },
   // One publisher, two pages: an image page in the image group and a video page in the video
   // group, because the post-gen script row a page shows is decided by the group it sits in.
   pubQwenImage: {
@@ -2045,6 +2113,7 @@ const ALL_GROUPS = [
       ["sd5pro","Dola-Seedream-5.0-pro"],
       ["pubFalImage","fal.ai"],
       ["pubBriaImage","bria.ai"],
+      ["pubBflImage","bfl.ai"],
       ["imgeditor","Image Editor F/A"], ["kora","Kora"], ["general","Upscale"], ["detailed","Detailed"] ] },
   { label:"PORTRAIT ENHANCORS", code:"CH-02", tag:"INDEX / 02", items:[
       ["skin","Skin"], ["portrait","Portrait"] ] },
@@ -2558,6 +2627,8 @@ function renderService(id, state){
       ? await callApi(`${BRIA}/${svc.bria}`, body, { autoWebhook:false })
       : svc.briav1
       ? await callApi(`${BRIA_V1}/${svc.briav1}`, body, { autoWebhook:false })
+      : svc.bfl
+      ? await callApi(`${BFL}/${svc.bfl}`, body, { autoWebhook:false })
       : veoUrl
       ? await callApi(veoUrl, body, { autoWebhook:false })
       : omniUrl
@@ -2607,6 +2678,7 @@ function renderService(id, state){
     if (!rid) return;
     if (svc.fal) trackFal(svc, j, status, out, abbr, input);
     else if (svc.bria) trackBria(svc, j, status, out, abbr, input);
+    else if (svc.bfl) trackBfl(svc, j, status, out, abbr, input);
     else if (svc.kling) trackKling(rid, status, out, abbr, input);
     else if (svc.qwen) trackQwen(rid, status, out, abbr, input);
     else if (svc.ark) trackArk(svc, rid, status, out, abbr, input);
@@ -2721,6 +2793,38 @@ async function trackBria(svc, sub, statusEl, outEl, abbr, input){
     if (!urls.length){
       statusEl.className = "note bad"; statusEl.textContent = `${id} :: completed with no image URL`;
       local("err", `${id} completed but carried no image: ${(s.text||"").slice(0,300)}`); return;
+    }
+    statusEl.textContent = `${id} :: DONE (${urls.length})`;
+    urls.forEach(u => showResult(outEl, u, id, abbr, input));
+    return;
+  }
+  statusEl.textContent = `${id} :: timed out polling`;
+}
+
+/* ---------- bfl.ai polling ---------- */
+// Submit returns {id, polling_url}; the status GET (x-key added by the proxy) carries
+// result.sample on "Ready". Result URLs are signed and expire in ~10 min, so showResult
+// saves on sight. The moderation and error states below are terminal and end the poll.
+async function trackBfl(svc, sub, statusEl, outEl, abbr, input){
+  const id = sub.id || "?", url = sub.polling_url;
+  if (!url){ statusEl.className = "note bad"; statusEl.textContent = `${id} :: no polling_url in response`; return; }
+  for (let i=0; i<150; i++){
+    await new Promise(r=> setTimeout(r, 2000));
+    const s = await callApi(url, null, { method:"GET", autoWebhook:false });
+    if (s.status >= 400 || s.status === 0){
+      statusEl.className = "note bad"; statusEl.textContent = `${id} :: polling failed (${s.status})`; return;
+    }
+    const j = s.json || {};
+    statusEl.textContent = `${id} :: ${j.status || s.status}`;
+    if (["Error","Failed","Task not found","Request Moderated","Content Moderated"].includes(j.status)){
+      statusEl.className = "note bad";
+      local("err", `${id} ${j.status}: ${(s.text||"").slice(0,300)}`); return;
+    }
+    if (j.status !== "Ready") continue;
+    const urls = svc.results(j);
+    if (!urls.length){
+      statusEl.className = "note bad"; statusEl.textContent = `${id} :: ready with no image URL`;
+      local("err", `${id} ready but carried no image: ${(s.text||"").slice(0,300)}`); return;
     }
     statusEl.textContent = `${id} :: DONE (${urls.length})`;
     urls.forEach(u => showResult(outEl, u, id, abbr, input));

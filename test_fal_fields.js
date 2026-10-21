@@ -157,6 +157,29 @@ assert.deepStrictEqual(fo.results({}), []);
   assert.strictEqual(3000 / (3000 + b.expand_left + b.expand_right), 0.75, "width at 75%");
   assert.strictEqual(1800 / (1800 + b.expand_top + b.expand_bottom), 0.75, "height at 75%"); }
 
+// --- bfl.ai: FLUX.1 Kontext [pro] + FLUX.1 Expand [pro] ----------------------
+const bk = SERVICES.bflkontext, be = SERVICES.bflexpand;
+assert.strictEqual(bk.bfl, "flux-kontext-pro", "kontext endpoint id must match bfl's");
+assert.strictEqual(be.bfl, "flux-pro-1.0-expand", "expand endpoint id must match bfl's");
+["input_image", "prompt", "aspect_ratio", "output_format", "safety_tolerance", "seed"]
+  .forEach(f => assert(names(bk).includes(f), `bfl kontext is missing ${f}`));
+["image", "top", "bottom", "left", "right", "prompt", "steps", "guidance", "output_format", "safety_tolerance"]
+  .forEach(f => assert(names(be).includes(f), `bfl expand is missing ${f}`));
+// Both read the result from the status poll's result.sample (bfl's shape, not fal's images[]).
+assert.deepStrictEqual(bk.results({ result: { sample: "a" } }), ["a"]);
+assert.deepStrictEqual(be.results({ result: { sample: "a" } }), ["a"]);
+assert.deepStrictEqual(be.results({ status: "Pending" }), [], "no sample yet means nothing to save");
+// Expand seats the source at 75% of the canvas, same 1/6-per-side rule as the fal outpaint,
+// capped at bfl's 2048px-per-side ceiling.
+{ const b = {}; be.fit(b, 3000, 1800);
+  assert.strictEqual(b.left, 500); assert.strictEqual(b.right, 500);
+  assert.strictEqual(b.top, 300);  assert.strictEqual(b.bottom, 300);
+  assert.strictEqual(3000 / (3000 + b.left + b.right), 0.75, "width at 75%"); }
+{ const b = {}; be.fit(b, 30000, 1800);   // a very wide source hits the 2048 cap, not 1/6
+  assert.strictEqual(b.left, 2048, "per-side expand is capped at 2048"); }
+assert(typeof be.prep === "function", "expand inlines its image to base64 via prep");
+assert(!bk.prep, "kontext sends the image as a URL, so it needs no prep");
+
 // --- bria.ai image editors ---------------------------------------------------
 // All four are synchronous (sync:true is added in the dispatch, not the form) and read the
 // one result shape { result: { image_url } }. Endpoint ids must match the pasted routes.
@@ -294,10 +317,10 @@ assert.strictEqual(spec(k25, "negative_prompt")[3].def, "blur, distort, and low 
 // A fal tab carrying `base` would queue the fal body against Enhancor with the wrong key.
 [sd, fx, br].forEach(s => assert(!s.base, `${s.title} must not define base`));
 // Every service rides exactly one transport: fal, Enhancor (base), BytePlus (ark/arkImage),
-// Kling, QwenCloud (qwen/qwenImage), Gemini (veo/omni), or Bria.
+// Kling, QwenCloud (qwen/qwenImage), Gemini (veo/omni), Bria, or BFL.
 Object.entries(SERVICES).forEach(([id, s]) =>
-  assert([s.fal, s.base, s.ark, s.arkImage, s.kling, s.qwen, s.qwenImage, s.veo, s.omni, s.bria, s.briav1].filter(Boolean).length === 1,
-    `${id} must have exactly one of fal/base/ark/arkImage/kling/qwen/qwenImage/veo/omni/bria/briav1`));
+  assert([s.fal, s.base, s.ark, s.arkImage, s.kling, s.qwen, s.qwenImage, s.veo, s.omni, s.bria, s.briav1, s.bfl].filter(Boolean).length === 1,
+    `${id} must have exactly one of fal/base/ark/arkImage/kling/qwen/qwenImage/veo/omni/bria/briav1/bfl`));
 
 // --- nav wiring --------------------------------------------------------------
 // A nav id with no matching service latches the switch and renders an empty pane - no
@@ -315,11 +338,14 @@ Object.entries(PUBLISHERS).forEach(([pid, p]) => p.models.forEach(([id, label]) 
 const reachable = new Set(GROUPS.flatMap(g => g.items.flatMap(([id]) =>
   PUBLISHERS[id] ? PUBLISHERS[id].models.map(([m]) => m) : [id])));
 ["seedance15fal", "kling26fal", "kling25tfal",
- "flux3edit", "fiboexpand", "seedream5edit"].forEach(id =>
+ "flux3edit", "fiboexpand", "seedream5edit",
+ "bflkontext", "bflexpand"].forEach(id =>
   assert(reachable.has(id), `${id} is not reachable from the nav`));
 // The three fal video tabs sit behind the one fal video page - a first visit opens on Kling 2.5 Turbo.
 assert.deepStrictEqual(PUBLISHERS.pubFal.models.map(m => m[0]), ["kling25tfal", "seedance15fal", "kling26fal"]);
 // The fal image editors sit behind their own page in the image group - a first visit opens on FLUX 3 Edit.
 assert.deepStrictEqual(PUBLISHERS.pubFalImage.models.map(m => m[0]), ["flux3edit", "fiboexpand", "fluxoutpaint", "seedream5edit"]);
+// bfl.ai's own page in the image group - a first visit opens on FLUX.1 Kontext [pro].
+assert.deepStrictEqual(PUBLISHERS.pubBflImage.models.map(m => m[0]), ["bflkontext", "bflexpand"]);
 
 console.log("ok - fal field shaping");
