@@ -24,6 +24,44 @@ Three of the five sign with `Bearer`, so the hostname is the only thing keeping 
 Kling and QwenCloud keys apart. `is_ark` / `is_kling` / `is_qwen` compare the parsed hostname
 exactly - a lookalike host matches none of them.
 
+## Google Gemini Images
+
+Under **Image Editors → Google Gemini Images**, choose Nano Banana 2.1,
+Nano Banana 2 (Gemini 3.1 Flash Image), Nano Banana 2 Lite, Nano Banana Pro,
+or the original Nano Banana (Gemini 2.5 Flash Image; restricted legacy access).
+Uses the existing `GEMINI_API_KEY` and `models/:generateContent` proxy/auth path.
+
+Upload a source image plus optional references and describe the edit. A prompt
+without images generates a new image. Output uses the existing preview, automatic
+save, and image post-generation scripts. Inline results are first stored locally;
+thought images are not saved as final images. No provider credentials enter the UI.
+
+Nano Banana Pro defaults to **9:16, 2K, IMAGE, 4 candidates**. Its lower controls
+are reduced to Seed and Candidate Count; the other Gemini forms are unchanged.
+
+On the other models, controls cover aspect ratio, model-specific resolution and thinking levels,
+response modalities, sampling, seed, token/candidate limits, stop sequences,
+penalties, input media resolution, system instructions, safety settings, and
+supported search tools. Optional **Conversation history** accepts REST contents
+including model thought signatures. **Advanced generation config** and **Advanced
+request parameters** expose remaining REST fields (including toolConfig, labels,
+continuationToken, serviceTier, store). Explicit form controls override matching
+advanced fields; form-built contents/config override request-level equivalents.
+Leave optional controls blank for Google defaults. Model support varies: generic
+REST fields are not a promise that every model accepts every combination.
+
+Limits: 14 image inputs, 20 MB total inline request; original Nano Banana works
+best with up to 3 references. Lite is 1K only; 512 is available only on Nano Banana 2.
+Google Search is offered on 2.1, 2 and Pro (image search only on 2.1/2). Pro has
+no adjustable thinking level; the original has no thinking/resolution control.
+Output format/compression fields in the SDK's ImageConfig are Vertex-only, not
+Gemini Developer API controls. There is no separate negative-prompt parameter.
+
+Verified against Google's [model catalogue](https://ai.google.dev/gemini-api/docs/models),
+[REST image guide](https://ai.google.dev/gemini-api/docs/generate-content/image-generation),
+and [REST schema](https://ai.google.dev/api/generate-content) on 2026-10-28.
+Offline tests: `node test_gemini_images.js`.
+
 ## Start / stop
 
 **First run:** double-click `setup.bat` once (see [Setup](#setup)).

@@ -319,7 +319,7 @@ assert.strictEqual(spec(k25, "negative_prompt")[3].def, "blur, distort, and low 
 // Every service rides exactly one transport: fal, Enhancor (base), BytePlus (ark/arkImage),
 // Kling, QwenCloud (qwen/qwenImage), Gemini (veo/omni), Bria, or BFL.
 Object.entries(SERVICES).forEach(([id, s]) =>
-  assert([s.fal, s.base, s.ark, s.arkImage, s.kling, s.qwen, s.qwenImage, s.veo, s.omni, s.bria, s.briav1, s.bfl].filter(Boolean).length === 1,
+  assert([s.fal, s.base, s.ark, s.arkImage, s.kling, s.qwen, s.qwenImage, s.veo, s.omni, s.geminiImage, s.bria, s.briav1, s.bfl].filter(Boolean).length === 1,
     `${id} must have exactly one of fal/base/ark/arkImage/kling/qwen/qwenImage/veo/omni/bria/briav1/bfl`));
 
 // --- nav wiring --------------------------------------------------------------
