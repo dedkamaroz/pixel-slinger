@@ -194,6 +194,17 @@ The library is attached by `renderService` to any field literally named `prompt`
 inherits the picker, buttons and counter from its ordinary field spec. `test_prompt_store.js`
 pins that hook.
 
+For modes with a video input, the prompt bar also offers an optional **Saved reference
+video** dropdown. Put numeric-named videos (`1.mp4`, `2.mov`, etc.) in `video_reference/`;
+they are listed in numeric order. Select the input role too on models with both feature
+and base videos. **New** / **Edit** saves the selected filename and video workflow with
+the prompt; **Load** (including automatic loading on first open) restores them. Select
+**No saved reference video** and **Edit** to remove the association. Old prompts still work.
+The original stays in `video_reference/`; queuing stages a copy through the existing
+`uploads/` and tunnel flow (200 MB maximum; provider-specific limits still apply).
+Keep the file in place: a missing file stops queuing with an error. Restart the server
+and reload the page after installing this update; reopen the model to refresh the file list.
+
 ### Saving results
 
 Files land in `uploads/`. Results **save themselves the moment a job finishes** - no clicking -

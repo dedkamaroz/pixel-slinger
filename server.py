@@ -42,6 +42,7 @@ from pathlib import Path, PureWindowsPath
 
 ROOT = Path(__file__).parent
 UPLOADS = ROOT / "uploads"
+VIDEO_REFERENCES = ROOT / "video_reference"
 OUTPUTS = ROOT / "outputs"
 PORT = int(os.environ.get("PORT", "8787"))
 AEST = timezone(timedelta(hours=10), "AEST")
@@ -485,9 +486,21 @@ def call_api(method, url, body, extra_headers=None):
 # --- post-save script chain ---------------------------------------------------
 
 VIDEO_EXTS = {".mp4", ".webm", ".mov", ".mkv", ".avi"}
+
+
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff"}
 MAX_POSTGEN = 3          # script slots per saved file, video or image
 VID_PREFIX, IMG_PREFIX = "POSTVIDGEN", "POSTIMGGEN"
+
+
+def reference_video(name):
+    if not isinstance(name, str) or not re.fullmatch(r"[0-9]+\.[A-Za-z0-9]+", name):
+        return None
+    path = VIDEO_REFERENCES / name
+    if (path.suffix.lower() not in VIDEO_EXTS or not path.is_file()
+            or path.resolve().parent != VIDEO_REFERENCES.resolve()):
+        return None
+    return path
 
 
 def media_kind(path):
@@ -704,6 +717,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/blob":
             return self._blob()
 
+        if path == "/api/video-references":
+            if not self._authed():
+                return self._json(403, {"error": "reload the page for a current session token"})
+            names = [p.name for p in VIDEO_REFERENCES.iterdir() if reference_video(p.name)] if VIDEO_REFERENCES.is_dir() else []
+            return self._json(200, sorted(names, key=lambda n: (int(n.split(".")[0]), n)))
+
         if path == "/events":
             return self._sse()
 
@@ -797,6 +816,22 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/upload":
             return self._upload(data)
+        if path == "/api/video-reference":
+            if not self._authed():
+                return self._json(403, {"error": "reload the page for a current session token"})
+            if not isinstance(data, dict):
+                return self._json(400, {"error": "expected a reference video name"})
+            ref = reference_video(data.get("name"))
+            if not ref:
+                return self._json(404, {"error": "reference video not found; check video_reference/"})
+            try:
+                if ref.stat().st_size > MAX_UPLOAD:
+                    return self._json(413, {"error": "reference video exceeds the 200 MB upload limit"})
+                return self._store_upload(ref.name, ref.read_bytes())
+            except FileNotFoundError:
+                return self._json(404, {"error": "reference video no longer exists"})
+            except OSError as e:
+                return self._json(500, {"error": str(e)})
         if path == "/api/call":
             return self._call(data)
         if path == "/api/save":

@@ -2281,19 +2281,64 @@ function pWrite(id, list){ localStorage.setItem(pKey(id), JSON.stringify(list));
 // saved inside the same millisecond - so bump past anything already taken.
 // `neg` (the negative prompt) rides along for models that have one; it is left off entirely for
 // models that do not, and older saved prompts simply have no `neg` key - both read back as absent.
-function pAdd(id, title, body, neg){
+function pAdd(id, title, body, neg, video){
   const list = pList(id);
   let pid = Date.now();
   while (list.some(p => p.id === pid)) pid++;
-  list.unshift(neg === undefined ? { id: pid, title, body } : { id: pid, title, body, neg });
+  list.unshift({id:pid, title, body, ...(neg === undefined ? {} : {neg}), ...(video ? {video} : {})});
   pWrite(id, list);
   return pid;
 }
-function pSet(id, pid, title, body, neg){
-  const rec = (p) => neg === undefined ? { id: p.id, title, body } : { id: p.id, title, body, neg };
+function pSet(id, pid, title, body, neg, video){
+  const rec = (p) => ({id:p.id, title, body, ...(neg === undefined ? {} : {neg}), ...(video ? {video} : {})});
   pWrite(id, pList(id).map(p => p.id === pid ? rec(p) : p));
 }
 function pDel(id, pid){ pWrite(id, pList(id).filter(p => p.id !== pid)); }
+
+const pVideoName = name => typeof name === "string" && /^\d+\.(mp4|webm|mov|mkv|avi)$/i.test(name);
+const pVideoFields = (svc, state, all=false) => svc.fields.filter(([n,t,l,o]) =>
+  ["file","files"].includes(t) && /video/.test(n) && (all || !o.when || o.when(state)));
+const pVideoPath = name => "/video_reference/" + name;
+function pVideo(svc, state){
+  for (const [field,type] of pVideoFields(svc, state)){
+    const url = type === "files" ? (state[field] || []).find(u => typeof u === "string" && u.startsWith("/video_reference/")) : state[field];
+    const name = typeof url === "string" && url.startsWith("/video_reference/") ? url.slice(17) : "";
+    if (pVideoName(name)) return {name, field, mode:Object.fromEntries(
+      svc.fields.filter(([n,t]) => t === "select" && ["type","mode","task"].includes(n) && state[n] !== undefined)
+        .map(([n]) => [n,state[n]]))};
+  }
+}
+function pLoadVideo(svc, state, p){
+  pVideoFields(svc, state, true).forEach(([n,t]) => {
+    if (t === "files") state[n] = (state[n] || []).filter(u => !u.startsWith("/video_reference/"));
+    else if ((state[n] || "").startsWith("/video_reference/")) delete state[n];
+  });
+  const v = p.video;
+  if (!v || !pVideoName(v.name)) return;
+  // Only restore workflow selectors, never arbitrary keys from browser storage.
+  const mode = {};
+  svc.fields.forEach(([n,t,l,o]) => {
+    if (t === "select" && ["type","mode","task"].includes(n) && o.opts?.includes(v.mode?.[n])) mode[n] = v.mode[n];
+  });
+  const target = pVideoFields(svc, {...state,...mode}).find(([n]) => n === v.field);
+  if (!target) return;
+  Object.assign(state, mode);
+  state[v.field] = target[1] === "files" ? [pVideoPath(v.name)] : pVideoPath(v.name);
+}
+async function pPrepareVideos(svc, body){
+  for (const [field,type] of pVideoFields(svc, body)){
+    const urls = type === "files" ? [...(body[field] || [])] : [body[field]];
+    for (let i=0; i<urls.length; i++){
+      if (typeof urls[i] !== "string" || !urls[i].startsWith("/video_reference/")) continue;
+      const name = urls[i].slice(17);
+      const r = await post("/api/video-reference", {name});
+      if (r.error || !r.url) throw new Error(r.error || `Reference video ${name}: no upload URL returned`);
+      urls[i] = r.url;
+      if (!r.reachable) local("warn", "tunnel is down - reference video is only reachable locally");
+    }
+    if (body[field] !== undefined) body[field] = type === "files" ? urls : urls[0];
+  }
+}
 
 // `apply` writes the loaded text back into form state and refreshes the counter.
 // `fresh` is true only on a first open of the tab, which is when the top (most recent)
@@ -2304,7 +2349,6 @@ function promptBar(svcId, ta, apply, fresh, ctx){
   // field, which keeps `neg` off their saved records entirely.
   const negKey = ctx && ctx.negKey;
   const negNow = () => negKey ? (ctx.state[negKey] ?? "") : undefined;
-  const loadNeg = (p) => { if (negKey && "neg" in p){ ctx.state[negKey] = p.neg || ""; ctx.redraw(); } };
   const bar = document.createElement("div");
   bar.className = "pbar";
   const sel = document.createElement("select");
@@ -2332,7 +2376,7 @@ function promptBar(svcId, ta, apply, fresh, ctx){
   const add = btn("p-new", "New", ()=>{
     const title = (window.prompt("Title for this prompt") || "").trim();
     if (!title) return;
-    PSEL[svcId] = pAdd(svcId, title, ta.value, negNow());
+    PSEL[svcId] = pAdd(svcId, title, ta.value, negNow(), pVideo(ctx.svc, ctx.state));
     fill();
     local("sys", `prompt "${title}" saved for ${svcId}`);
   });
@@ -2340,14 +2384,16 @@ function promptBar(svcId, ta, apply, fresh, ctx){
     const p = current(); if (!p) return;
     const title = (window.prompt("Title for this prompt", p.title) || "").trim();
     if (!title) return;
-    pSet(svcId, p.id, title, ta.value, negNow());   // body + negative come from the form, so Edit saves both
+    pSet(svcId, p.id, title, ta.value, negNow(), pVideo(ctx.svc, ctx.state));
     fill();
     local("sys", `prompt "${title}" updated for ${svcId}`);
   });
   const load = btn("p-load", "Load", ()=>{
     const p = current(); if (!p) return;
     ta.value = p.body; apply(p.body);
-    loadNeg(p);   // restores the negative field too (and re-renders) when the profile carries one
+    if (negKey && "neg" in p) ctx.state[negKey] = p.neg || "";
+    pLoadVideo(ctx.svc, ctx.state, p);
+    ctx.redraw();
   });
   const del = btn("p-del", "Delete", ()=>{
     const p = current(); if (!p) return;
@@ -2357,6 +2403,46 @@ function promptBar(svcId, ta, apply, fresh, ctx){
   });
 
   fill();
+  const videoFields = pVideoFields(ctx.svc, ctx.state);
+  if (videoFields.length){
+    const videoSel = document.createElement("select");
+    videoSel.disabled = true;
+    videoSel.setAttribute("aria-label", "Saved reference video (optional)");
+    videoSel.innerHTML = '<option value="">No saved reference video</option>';
+    bar.appendChild(videoSel);
+    const selected = pVideo(ctx.svc, ctx.state);
+    const addOption = (value, text) => {
+      const option = document.createElement("option"); option.value = value; option.textContent = text;
+      videoSel.appendChild(option);
+    };
+    if (selected){
+      const value = selected.field + ":" + selected.name;
+      addOption(value, selected.name); videoSel.value = value;
+    }
+    fetch("/api/video-references", {headers:{"X-Local-Token":LOCAL_TOKEN}})
+      .then(async r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(files => {
+        videoSel.innerHTML = '<option value="">No saved reference video</option>';
+        videoFields.forEach(([field,type,label]) => files.forEach(name =>
+          addOption(field+":"+name, videoFields.length > 1 ? `${label}: ${name}` : name)));
+        if (selected){
+          if (!files.includes(selected.name)) addOption(selected.field+":"+selected.name, `${selected.name} (missing)`);
+          videoSel.value = selected.field+":"+selected.name;
+        }
+        videoSel.disabled = false;
+      }).catch(e => {
+        videoSel.disabled = true;
+        local("err", "Reference video list failed: " + e.message);
+      });
+    videoSel.onchange = () => {
+      pLoadVideo(ctx.svc, ctx.state, {});
+      if (videoSel.value){
+        const [field,name] = videoSel.value.split(":");
+        pLoadVideo(ctx.svc, ctx.state, {video:{field,name}});
+      }
+      ctx.redraw();
+    };
+  }
   if (fresh){
     const list = pList(svcId);
     if (list.length){ PSEL[svcId] = list[0].id; sel.value = list[0].id;
@@ -2390,6 +2476,10 @@ function renderService(id, state){
     svc.fields.forEach(([n,t,l,o])=>{ if (o.def!==undefined) state[n] = numOrBlank(t, o.def); });
   }
   FORMS[id] = state;
+  if (fresh){
+    const latest = pList(id)[0];
+    if (latest) pLoadVideo(svc, state, latest);
+  }
   FORM_HOST.innerHTML = "";
   const h = document.createElement("div");
   h.className = "category"; h.textContent = svc.title;
@@ -2522,7 +2612,7 @@ function renderService(id, state){
         t.oninput = ()=> apply(t.value);
         // Save the negative prompt in the same profile for any model that has one.
         const negKey = (svc.fields.find(f => f[0] === "negativePrompt" || f[0] === "negative_prompt") || [])[0];
-        cell.appendChild(promptBar(id, t, apply, fresh, { state, negKey, redraw }));
+        cell.appendChild(promptBar(id, t, apply, fresh, { state, negKey, redraw, svc }));
         apply(t.value);
       }
       cell.appendChild(t);
@@ -2599,9 +2689,9 @@ function renderService(id, state){
     status.className = "note";        // clear a "bad" left over from the last run
     // prep() runs before shape(): it pulls any uploaded image/video inputs back as base64,
     // which shape() then folds into the request body (Gemini takes no http image URL).
-    if (svc.prep){
+    if (svc.prep || pVideoFields(svc, body).length){
       status.textContent = "preparing inputs...";
-      try { await svc.prep(body); }
+      try { await pPrepareVideos(svc, body); if (svc.prep) await svc.prep(body); }
       catch(e){ status.className = "note bad"; status.textContent = "input prep failed";
                 local("err", "prep failed: " + e.message); send.disabled = false; return; }
     }
