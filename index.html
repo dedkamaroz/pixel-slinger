@@ -1342,6 +1342,11 @@ async function omniPrep(b){
   if (b.image) b.image = await Promise.all(b.image.map(async u => {
     const x = await geminiBytes(u); return { type: "image", data: x.b64, mime_type: x.mime };
   }));
+  if (b.video) {
+    const x = await geminiBytes(b.video);
+    if (!x.mime.startsWith("video/")) throw new Error("Reference video input must be a video file");
+    b.video = { type: "video", data: x.b64, mime_type: x.mime };
+  }
 }
 // bfl's Expand route takes `image` as raw base64 only (unlike Kontext, which also accepts a
 // URL), so pull the uploaded file back and inline it - reusing the same fetch->base64 helper.
@@ -1375,15 +1380,20 @@ function veoShape(b){
 }
 // Flat form state -> an Interactions request body (model is added at dispatch).
 function omniShape(b){
-  const imgs = b.image || [];
-  // Text-to-video takes `input` as a plain string; any image turns it into a typed Step[]
-  // array (images first, then the text), per the Interactions API.
-  const input = imgs.length
-    ? [...imgs, ...(b.prompt ? [{ type: "text", text: b.prompt }] : [])]
+  const media = [...(b.image || []), ...(b.video ? [b.video] : [])];
+  // Text-only input stays a string; media inputs precede the prompt in the typed array.
+  const input = media.length
+    ? [...media, ...(b.prompt ? [{ type: "text", text: b.prompt }] : [])]
     : (b.prompt || "");
   const rf = { type: "video", delivery: "uri" };   // uri keeps the response small; we poll the file
   if (b.aspect_ratio) rf.aspect_ratio = b.aspect_ratio;
   if (b.resolution)   rf.resolution   = b.resolution;
+  if (b.duration != null && b.duration !== "") {
+    const seconds = Number(b.duration);
+    if (!Number.isInteger(seconds) || seconds < 3 || seconds > 10)
+      throw new Error("Omni duration must be a whole number from 3 to 10 seconds");
+    rf.duration = `${seconds}s`;
+  }
   const vc = {};
   if (b.task) vc.task = b.task;
   // Always store: URI delivery requires store=true, and it is what lets a clip be edited /
@@ -1430,8 +1440,12 @@ const OMNI_FIELDS = [
   ["prompt","textarea","Prompt",{def:"",rows:4,
     hint:"required for text-to-video. Describe the clip; put negatives in the text (no separate field)"}],
   ["image","files","Images",{hint:"optional - first + last frame (2) for image_to_video, or refs for reference_to_video"}],
+  ["video","file","Reference video",{when:s=>s.task === "reference_to_video",
+    hint:"optional - drop a reference clip up to 3 seconds; max 25 MB for inline input"}],
   ["task","select","Task",{opts:["text_to_video","image_to_video","reference_to_video","edit","extend"],def:"image_to_video",
-    hint:"edit / extend act on a previous interaction id; switch to text_to_video for a prompt-only clip"}],
+    rerender:true, hint:"edit / extend act on a previous interaction id; switch to text_to_video for a prompt-only clip"}],
+  ["duration","select","Video length (s)",{opts:["","3","4","5","6","7","8","9","10"],def:"",
+    hint:"optional - blank lets the model choose the duration"}],
   ["aspect_ratio","select","Aspect ratio",{opts:["16:9","9:16"],def:"9:16"}],
   ["resolution","select","Resolution",{opts:["360p","720p","1080p","4k"],def:"720p",hint:"1080p and 4k are upscaled"}],
   ["previous_interaction_id","text","Previous interaction id",{def:"",
