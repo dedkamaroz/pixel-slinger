@@ -1103,7 +1103,7 @@ const qwenShape = (params, inputs) => b => {
 };
 
 // Wan3.0 has three ways in, and the API refuses a mix: first/last frame on one side,
-// every reference input (image, video, audio, document, link) on the other, text alone as
+// reference images and videos on the other, text alone as
 // the third. A mode select gates the boxes so the form cannot offer a combination the
 // validator rejects - the same reasoning as Kling's image-to-video / motion-control switch.
 const WAN_T2V = "text-to-video", WAN_F2V = "frame-to-video", WAN_R2V = "reference-to-video";
@@ -1111,33 +1111,57 @@ const wanFrames = s => s.mode === WAN_F2V;
 const wanRefs   = s => s.mode === WAN_R2V;
 const WAN_RATIOS = ["16:9","4:3","1:1","3:4","9:16"];
 
-const wanShape = qwenShape(QWEN_VID_PARAMS, b => {
-  const media = [];
-  const add = (v, type) => (Array.isArray(v) ? v : [v]).forEach(url => media.push({ type, url }));
-  // Order is the numbering the prompt uses (Image 1, Video 1...), so the lists go in the
-  // order the form shows them. The mode gate has already dropped the other side's inputs
-  // from the state, so nothing here has to re-check the exclusion.
-  if (b.first_frame)     add(b.first_frame,     "first_frame");
-  if (b.last_frame)      add(b.last_frame,      "last_frame");
-  if (b.reference_image) add(b.reference_image, "reference_image");
-  if (b.reference_video) add(b.reference_video, "reference_video");
-  if (b.reference_audio) add(b.reference_audio, "reference_audio");
-  // A document and a link are one or the other - the document wins, as the hint says.
-  if (b.file)            add(b.file,            "file");
-  else if (b.link)       add(b.link,            "link");
-  const input = {};
-  if (b.prompt) input.prompt = b.prompt;
-  if (media.length) input.media = media;
-  return input;
-});
+const wanShape = b => {
+  // Removed controls stay off even if old form state supplied them.
+  b.audio = false; b.prompt_extend = false; b.watermark = false;
+  qwenShape(QWEN_VID_PARAMS, b => {
+    const media = [];
+    const add = (v, type) => (Array.isArray(v) ? v : [v]).forEach(url => media.push({ type, url }));
+    // Order is the numbering the prompt uses (Image 1, Video 1...), so the lists go in the
+    // order the form shows them. The mode gate has already dropped the other side's inputs
+    // from the state, so nothing here has to re-check the exclusion.
+    if (b.first_frame)     add(b.first_frame,     "first_frame");
+    if (b.last_frame)      add(b.last_frame,      "last_frame");
+    if (b.reference_image) add(b.reference_image, "reference_image");
+    if (b.reference_video) add(b.reference_video, "reference_video");
+    const input = {};
+    if (b.prompt) input.prompt = b.prompt;
+    if (media.length) input.media = media;
+    return input;
+  })(b);
+};
+
+// Reference mode follows Video 1; the API accepts whole seconds, at least two.
+const wanPrep = async b => {
+  if (!wanRefs(b)) return;
+  const url = Array.isArray(b.reference_video) ? b.reference_video[0] : b.reference_video;
+  if (!url) { b.duration = -1; return; }
+  const seconds = await new Promise((resolve, reject) => {
+    const video = document.createElement("video");
+    const finish = (error, duration) => {
+      clearTimeout(timer);
+      video.onloadedmetadata = video.onerror = null;
+      video.removeAttribute("src"); video.load();
+      if (error) reject(new Error(error)); else resolve(duration);
+    };
+    const timer = setTimeout(() => finish("Reference video metadata timed out"), 30000);
+    video.preload = "metadata";
+    video.onloadedmetadata = () => Number.isFinite(video.duration) && video.duration > 0
+      ? finish(null, video.duration) : finish("Reference video has no valid duration");
+    video.onerror = () => finish("Could not read reference video duration");
+    video.src = blobUrl(url);
+  });
+  if (seconds < 1 || seconds > 15) throw new Error("Video 1 must be between 1 and 15 seconds");
+  b.duration = Math.max(2, Math.ceil(seconds));
+};
 
 const WAN_FIELDS = [
-  ["mode","select","Mode",{opts:[WAN_T2V, WAN_F2V, WAN_R2V], def:WAN_F2V, rerender:true,
+  ["mode","select","Mode",{opts:[WAN_T2V, WAN_F2V, WAN_R2V], def:WAN_R2V, rerender:true,
     hint:"frames and references cannot share a request - the mode picks which side the form offers. "
        + "Editing or extending a clip is reference-to-video with the clip as Video 1"}],
   ["prompt","textarea","Prompt",{def:"",rows:4,
     by: s => wanRefs(s)
-      ? {hint:"up to 20,000 chars. Address the references as Image 1, Video 1, Audio 1... - each type "
+      ? {hint:"up to 20,000 chars. Address the references as Image 1, Video 1... - each type "
              + "numbered on its own, in the order listed below. \"edit\" / \"replace\" edits Video 1, "
              + "\"extend\" / \"continue\" extends it"}
       : wanFrames(s)
@@ -1151,35 +1175,16 @@ const WAN_FIELDS = [
     hint:"max 10 - jpg/png/bmp/webp, 240-8000px a side, aspect within 8:1, 20 MB each"}],
   ["reference_video","files","Reference videos",{when:wanRefs,
     hint:"max 5 - mp4/mov, 1-15s each and 15s combined, 240-4096px a side, 100 MB each. "
-       + "Input plus output duration must stay under 30s"}],
-  ["reference_audio","files","Reference audio",{when:wanRefs,
-    hint:"max 5 - wav/mp3, 1-15s each and 15s combined, 15 MB each"}],
-  ["file","file","Document",{when:wanRefs,
-    hint:"optional - one docx/pptx/xlsx/pdf/txt/md, max 100 MB and 50 pages. A document or a web page, "
-       + "not both - the document wins"}],
-  ["link","text","Web page",{def:"",when:wanRefs,
-    hint:"optional - one public URL (no login). Dropped if a document is set"}],
-  ["resolution","select","Resolution",{opts:["480P","720P","1080P"],def:"720P",
-    hint:"their default is 1080P - twice the per-second price of 720P. No mode needs a minimum"}],
-  // adaptive is what their guide recommends whenever there is an input to adapt to, and it is
-  // meaningless with text alone - so the list and the default follow the mode, the way
-  // Seedance 2.5's do.
-  // The static def is what a fresh form seeds with (frame mode), the text-mode def is what
-  // replaces a carried adaptive once the list no longer offers it. A ratio the user picked
-  // survives a mode switch in every other case - it is their recommendation, not a rule.
-  ["ratio","select","Aspect ratio",{def:"adaptive",
+       + "Output duration follows Video 1 (rounded up to whole seconds, minimum 2s). Input plus output must stay under 30s"}],
+  ["resolution","select","Resolution",{opts:["480P","720P","1080P"],def:"1080P",
+    hint:"1080P is twice the per-second price of 720P"}],
+  ["ratio","select","Aspect ratio",{def:"9:16",
     optsBy: s => s.mode === WAN_T2V ? WAN_RATIOS : ["adaptive", ...WAN_RATIOS],
     by: s => s.mode === WAN_T2V ? {def:"9:16", hint:"free choice - text alone has nothing to adapt to"}
                                 : {hint:"adaptive follows the input's framing - their recommendation for this mode"}}],
-  ["duration","number","Duration (s)",{min:-1,max:30,
-    by: s => wanRefs(s)
-      ? {def:-1, hint:"2-30, or -1 to let the model pick - their recommendation for edits and extensions, "
-                    + "which keep the clip's own length. With a reference video, input plus output must stay under 30s"}
-      : {def:5, hint:"2-30, or -1 to let the model pick the length (smart duration)"}}],
-  ["audio","bool","Generate audio",{def:true,hint:"a generated soundtrack - the price is the same either way"}],
-  ["prompt_extend","bool","Prompt rewrite",{def:true,hint:"LLM rewrite of the prompt - their default is on, costs a little latency"}],
+  ["duration","number","Duration (s)",{def:5,min:-1,max:30,when:s => !wanRefs(s),
+    hint:"2-30, or -1 to let the model pick the length (smart duration)"}],
   ["seed","number","Seed",{def:"",min:0,max:2147483647,hint:"optional - blank is random"}],
-  ["watermark","bool","Watermark",{def:false}],
 ];
 
 // prime is the same model with the same inputs, faster and at twice the per-second price;
@@ -1187,7 +1192,7 @@ const WAN_FIELDS = [
 const wanVideo = (model, o) => ({
   title: `${o.title} - ${model}`,
   qwen: "/services/aigc/video-generation/video-synthesis", model, abbr: o.abbr,
-  shape: wanShape, fields: WAN_FIELDS,
+  shape: wanShape, prep: wanPrep, fields: WAN_FIELDS,
 });
 const wanVideos = {
   wan30:      wanVideo("wan3.0-video",       {title:"Wan3.0-Video - text / frame / reference to video", abbr:"wan30"}),
@@ -2215,8 +2220,8 @@ const PUBLISHERS = {
             ["qwenimg21turbo","Qwen-Image-2.1-Turbo"]] },
   pubQwenVideo: {
     brand:"qwen", name:"QWEN", tail:"CLOUD",
-    sub:"Wan-Video &middot; dashscope-intl.aliyuncs.com",
-    models:[["wan30","Wan3.0-Video"], ["wan30prime","Wan3.0-Video-Prime (fast)"]] },
+    sub:"Wan-Video &middot; dashscope-intl.aliyuncs.com", defaultModel:"wan30prime",
+    models:[["wan30prime","Wan3.0-Video-Prime (fast)"], ["wan30","Wan3.0-Video"]] },
   pubGoogleImage: {
     brand:"google", name:"GOOGLE", tail:"GEMINI IMAGES",
     sub:"Nano Banana image generation &amp; editing &middot; generativelanguage.googleapis.com",
@@ -2339,10 +2344,10 @@ function renderPublisher(pid){
   const sel = document.createElement("select");
   sel.id = "pubsel-" + pid; lab.htmlFor = sel.id;   // associate the label with the dropdown
   sel.innerHTML = p.models.map(([id,label])=> `<option value="${id}">${esc(label)}</option>`).join("");
-  // Last model used on this page, or their newest. A remembered id that no longer exists
+  // Explicit page default, otherwise the last model used or their newest. A remembered id that no longer exists
   // (a model dropped from the list) falls back rather than rendering an empty page.
   const saved = localStorage.getItem("pubModel:" + pid);
-  sel.value = p.models.some(([id])=> id === saved) ? saved : p.models[0][0];
+  sel.value = p.defaultModel || (p.models.some(([id])=> id === saved) ? saved : p.models[0][0]);
   pick.append(lab, sel);
   plate.appendChild(pick);
   pane.appendChild(plate);

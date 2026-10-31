@@ -85,10 +85,14 @@ assert.deepStrictEqual(img.results({}), []);
 // --- video: mode gate ------------------------------------------------------------
 // Frames and references cannot share a request, so the form never offers both sides.
 const FRAME_IN = ["first_frame", "last_frame"];
-const REF_IN = ["reference_image", "reference_video", "reference_audio", "file", "link"];
+const REF_IN = ["reference_image", "reference_video"];
 const modeOpts = vid.fields.find(f => f[0] === "mode")[3];
 assert.deepStrictEqual(modeOpts.opts, ["text-to-video", "frame-to-video", "reference-to-video"]);
 assert(modeOpts.rerender);
+assert.strictEqual(modeOpts.def, "reference-to-video");
+assert.strictEqual(vid.fields.find(f => f[0] === "resolution")[3].def, "1080P");
+["reference_audio", "file", "link", "watermark", "audio", "prompt_extend"].forEach(n =>
+  assert(!vid.fields.some(f => f[0] === n), `${n} removed from form`));
 let on = shown(vid, { mode: "frame-to-video" });
 assert(FRAME_IN.every(n => on.includes(n)) && !REF_IN.some(n => on.includes(n)), "frame mode shows frames only");
 on = shown(vid, { mode: "reference-to-video" });
@@ -96,25 +100,18 @@ assert(REF_IN.every(n => on.includes(n)) && !FRAME_IN.some(n => on.includes(n)),
 on = shown(vid, { mode: "text-to-video" });
 assert(![...FRAME_IN, ...REF_IN].some(n => on.includes(n)), "text mode shows no media input");
 // The knobs are there in every mode.
-["resolution", "ratio", "duration", "audio", "prompt_extend", "seed", "watermark"].forEach(n =>
+["resolution", "ratio", "seed"].forEach(n =>
   [ "text-to-video", "frame-to-video", "reference-to-video"].forEach(m =>
     assert(shown(vid, { mode: m }).includes(n), `${n} missing in ${m}`)));
 
-// adaptive is only offered when there is an input to adapt to, and is then the default;
-// smart duration is the default for references, since edits keep the clip's own length.
+// Vertical by default in all modes; adaptive remains an optional choice with inputs.
 const ratio = vid.fields.find(f => f[0] === "ratio")[3];
-assert.deepStrictEqual(ratio.optsBy({ mode: "text-to-video" }), ["16:9", "4:3", "1:1", "3:4", "9:16"]);
-assert.deepStrictEqual(ratio.optsBy({ mode: "frame-to-video" }), ["adaptive", "16:9", "4:3", "1:1", "3:4", "9:16"]);
-// A fresh form seeds off the static def, so that is the one that has to be adaptive; text
-// mode needs its own, or a carried adaptive would be replaced by a value not in the list.
-assert.strictEqual(ratio.def, "adaptive");
-assert.strictEqual(ratio.by({ mode: "frame-to-video" }).def, undefined);
-assert.strictEqual(ratio.by({ mode: "text-to-video" }).def, "9:16");
-assert(ratio.optsBy({ mode: "text-to-video" }).includes(ratio.by({ mode: "text-to-video" }).def));
-const dur = vid.fields.find(f => f[0] === "duration")[3];
-assert.strictEqual(dur.by({ mode: "reference-to-video" }).def, -1);
-assert.strictEqual(dur.by({ mode: "frame-to-video" }).def, 5);
-assert.strictEqual(dur.min, -1); assert.strictEqual(dur.max, 30);
+assert.strictEqual(ratio.def, "9:16");
+assert(!ratio.optsBy({ mode: "text-to-video" }).includes("adaptive"));
+assert(ratio.optsBy({ mode: "reference-to-video" }).includes("adaptive"));
+assert(!shown(vid, { mode: "reference-to-video" }).includes("duration"));
+assert(shown(vid, { mode: "frame-to-video" }).includes("duration"));
+assert.strictEqual(vid.fields.find(f => f[0] === "duration")[3].def, 5);
 
 // --- video: flat form -> input.media / parameters --------------------------------
 b = shape(vid, { mode: "frame-to-video", prompt: "she turns", first_frame: "https://x/f.jpg",
@@ -124,23 +121,23 @@ b = shape(vid, { mode: "frame-to-video", prompt: "she turns", first_frame: "http
 assert.deepStrictEqual(b, {
   input: { prompt: "she turns",
            media: [{ type: "first_frame", url: "https://x/f.jpg" }, { type: "last_frame", url: "https://x/l.jpg" }] },
-  parameters: { resolution: "720P", ratio: "9:16", duration: 5, audio: true, prompt_extend: true, seed: 3, watermark: false },
+  parameters: { resolution: "720P", ratio: "9:16", duration: 5, audio: false, prompt_extend: false, seed: 3, watermark: false },
 });
 
 // Reference lists keep the form's order, since that order is the numbering the prompt uses.
 b = shape(vid, { reference_image: ["https://x/1.jpg", "https://x/2.jpg"], reference_video: ["https://x/v.mp4"],
                  reference_audio: ["https://x/a.mp3"], file: "https://x/d.pdf", link: "https://example.com",
                  duration: -1 });
-// A document and a web page are one or the other - the document wins.
+// Removed media are ignored even if supplied by stale state.
 assert.deepStrictEqual(b.input.media.map(m => m.type),
-  ["reference_image", "reference_image", "reference_video", "reference_audio", "file"]);
-assert.deepStrictEqual(shape(vid, { link: "https://example.com" }).input.media, [{ type: "link", url: "https://example.com" }]);
+  ["reference_image", "reference_image", "reference_video"]);
+assert.strictEqual(shape(vid, { link: "https://example.com" }).input.media, undefined);
 assert.strictEqual(b.input.prompt, undefined, "no prompt key when the box is empty");
 assert.strictEqual(b.parameters.duration, -1, "-1 is smart duration, not a blank");
 
 // A blank form sends an empty input - the API's own "prompt or media" error is the right one.
 b = shape(vid, {});
-assert.deepStrictEqual(b, { input: {}, parameters: {} });
+assert.deepStrictEqual(b, { input: {}, parameters: { audio: false, prompt_extend: false, watermark: false } });
 
 // Enums match the reference: their casing is upper-case P, unlike every other tab here.
 const opt = (svc, n) => svc.fields.find(f => f[0] === n)[3].opts;
@@ -148,13 +145,73 @@ assert.deepStrictEqual(opt(vid, "resolution"), ["480P", "720P", "1080P"]);
 
 // --- nav -----------------------------------------------------------------------
 // One publisher, two pages, each in the group whose post-gen row it needs.
-assert.deepStrictEqual(PUBLISHERS.pubQwenImage.models, [["qwenimg30pro", "Qwen-Image-3.0-Pro"]]);
-assert.deepStrictEqual(PUBLISHERS.pubQwenVideo.models.map(m => m[0]), ["wan30", "wan30prime"]);
-assert.strictEqual(PUBLISHERS.pubQwenVideo.models[0][0], "wan30", "the standard model opens first - prime is twice the price");
+assert.deepStrictEqual(PUBLISHERS.pubQwenImage.models.map(m => m[0]), ["qwenimg30pro", "qwenimg21pro", "qwenimg21turbo"]);
+assert.deepStrictEqual(PUBLISHERS.pubQwenVideo.models.map(m => m[0]), ["wan30prime", "wan30"]);
+assert.strictEqual(PUBLISHERS.pubQwenVideo.models[0][0], "wan30prime", "fast model opens by default");
 const group = id => ALL_GROUPS.find(g => g.items.some(([n]) => n === id)).label;
 assert.strictEqual(group("pubQwenImage"), "IMAGE EDITORS");
 assert.strictEqual(group("pubQwenVideo"), "VIDEO GENERATORS");
 // Both pages open on the default, and both prompts get the library (a plain textarea).
 [img, vid, prime].forEach(s => assert.strictEqual(s.fields.find(f => f[0] === "prompt")[1], "textarea"));
 
-console.log("test_qwen.js: ok");
+// Existing users also open on Prime, while the standard option still works on selection.
+const renderPublisher = new Function("PUBLISHERS", "localStorage", "document", "pane", "esc", "renderService",
+  "let FORM_HOST;\n" + html.slice(html.indexOf("function renderPublisher(pid){"), html.indexOf("function render(id){")) + "\nreturn renderPublisher;");
+for (const saved of [null, "wan30", "wan30prime", "retired"]){
+  const elements = [], opened = [], store = { "pubModel:pubQwenVideo": saved };
+  renderPublisher(PUBLISHERS, { getItem:k=>store[k], setItem:(k,v)=>{store[k]=v;} },
+    { createElement:tag=>{const e={tag,append(){},appendChild(){}}; elements.push(e); return e;} },
+    {appendChild(){}}, s=>s, id=>opened.push(id))("pubQwenVideo");
+  assert.deepStrictEqual(opened, ["wan30prime"]);
+  const picker=elements.find(e=>e.tag === "select");
+  picker.value="wan30"; picker.onchange();
+  assert.deepStrictEqual(opened, ["wan30prime", "wan30"]);
+}
+
+// Exercise metadata success, failure, cleanup and timeouts without provider requests.
+(async () => {
+  let duration = 7.2, fail = false, cleaned = 0, src, timerCallback;
+  global.blobUrl = url => "/api/blob?url=" + encodeURIComponent(url);
+  const realSetTimeout = global.setTimeout;
+  global.setTimeout = fn => { timerCallback = fn; return 1; };
+  global.document = { createElement: tag => {
+    assert.strictEqual(tag, "video");
+    return {
+      duration,
+      set src(url) { src = url; queueMicrotask(() => {
+        if (fail === "timeout") timerCallback();
+        else if (fail) this.onerror(); else this.onloadedmetadata();
+      }); },
+      removeAttribute: key => { assert.strictEqual(key, "src"); cleaned++; },
+      load() {},
+    };
+  }};
+  try {
+    for (const svc of [vid, prime]) {
+      const body = { mode: "reference-to-video", reference_video: ["https://x/v.mp4", "https://x/second.mp4"], duration: 30 };
+      await svc.prep(body);
+      assert.strictEqual(body.duration, 8);
+      assert(src.includes(encodeURIComponent("https://x/v.mp4")));
+      assert.strictEqual(shape(svc, body).parameters.duration, 8);
+    }
+    for (const [seconds, expected] of [[1, 2], [8, 8], [15, 15]]) {
+      duration = seconds;
+      const body = { mode: "reference-to-video", reference_video: ["https://x/v.mp4"] };
+      await vid.prep(body); assert.strictEqual(body.duration, expected);
+    }
+    for (const seconds of [NaN, Infinity, 0, 0.5, 15.1]) {
+      duration = seconds;
+      await assert.rejects(vid.prep({ mode: "reference-to-video", reference_video: ["https://x/v.mp4"] }));
+    }
+    for (const failure of [true, "timeout"]) {
+      fail = failure;
+      await assert.rejects(vid.prep({ mode: "reference-to-video", reference_video: ["https://x/v.mp4"] }));
+    }
+    const noVideo = { mode: "reference-to-video" }; await vid.prep(noVideo);
+    assert.strictEqual(noVideo.duration, -1);
+    const frames = { mode: "frame-to-video", duration: 5 }; await vid.prep(frames);
+    assert.strictEqual(frames.duration, 5);
+    assert.strictEqual(cleaned, 12, "metadata resources cleaned on success and failure");
+  } finally { global.setTimeout = realSetTimeout; }
+  console.log("test_qwen.js: ok");
+})().catch(error => { console.error(error); process.exitCode = 1; });
