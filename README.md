@@ -50,7 +50,7 @@ with a subtle {{expression}} expression. Preserve the person's identity.
 ```
 
 Choose **Time of day**, **Location**, and **Subtle face expression** from the dropdowns.
-The prompt preview updates immediately; the template stays editable. New/Edit save the
+Help under the Prompt label lists the placeholders; the template stays editable. New/Edit save the
 original placeholders, so Load can reuse them with different selections. Choices survive
 switching tabs during the session; Clear inputs resets them. Only placeholders actually
 used in the template require a selection before queueing. Prompts without placeholders

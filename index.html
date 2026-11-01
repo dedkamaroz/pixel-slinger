@@ -2771,17 +2771,21 @@ function renderService(id, state){
       const t = document.createElement("textarea");
       t.rows = o.rows||4; t.value = state[name] ?? o.def ?? "";
       t.oninput = ()=> state[name] = t.value;
-      const preview = name === "prompt" && svc.promptText ? document.createElement("div") : null;
       // The prompt box, and only that, carries the library and the character count.
       // Titles are never sent anywhere, so they are not counted.
       if (name === "prompt"){
+        if (svc.promptText) {
+          t.setAttribute("aria-label", "Prompt template");
+          const hint = document.createElement("small");
+          hint.textContent = "Use {{time_of_day}}, {{location}}, {{expression}}. Use the selectors below to choose their values.";
+          row.querySelector(".lbl").appendChild(hint);
+        }
         const cnt = document.createElement("span"); cnt.className = "pcount";
         row.querySelector(".lbl").appendChild(cnt);
         const apply = v => {
           state[name] = v;
           const text = svc.promptText ? svc.promptText(state,false) : v;
           cnt.textContent = text.length + " characters";
-          if (preview) preview.textContent = "Prompt preview\n" + text;
         };
         t.oninput = ()=> apply(t.value);
         // Save the negative prompt in the same profile for any model that has one.
@@ -2790,15 +2794,6 @@ function renderService(id, state){
         apply(t.value);
       }
       cell.appendChild(t);
-      if (preview) {
-        t.setAttribute("aria-label", "Prompt template");
-        const hint = document.createElement("small"); hint.className = "note";
-        hint.textContent = "Use {{time_of_day}}, {{location}}, {{expression}}. Saved prompts keep these placeholders; selections update the preview below.";
-        cell.appendChild(hint);
-        preview.className = "note"; preview.style.whiteSpace = "pre-wrap";
-        preview.setAttribute("aria-label", "Prompt preview");
-        cell.appendChild(preview);
-      }
     } else {
       const i = document.createElement("input");
       i.type = type;

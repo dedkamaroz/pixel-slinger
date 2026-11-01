@@ -1,4 +1,4 @@
-// node test_prompt_variables.js - Pro-only templates, live controls, library and dispatch.
+// node test_prompt_variables.js - Pro-only templates, controls, label help, library and dispatch.
 const fs = require("fs"), assert = require("assert");
 const html = fs.readFileSync(__dirname + "/index.html","utf8").replace(/\r\n/g,"\n");
 const API="https://api.example", ARK="https://ark.example";
@@ -72,47 +72,53 @@ class Element {
   const button=label=>host.querySelectorAll("button").find(el=>el.textContent===label);
   const change=(label,value)=>{const el=find(label);assert(el,`missing ${label}`);el.value=value;el.onchange();};
   ui.renderService("nbpro");
+  const help="Use {{time_of_day}}, {{location}}, {{expression}}. Use the selectors below to choose their values.";
+  const hasLabelHelp=()=>host.querySelectorAll(".lbl").some(label=>label.children.some(el=>el.tagName==="small" && el.textContent===help));
+  assert(hasLabelHelp(),"variable instructions belong in the left prompt label");
+  assert(!find("Prompt preview"),"duplicate prompt preview must be removed");
+  assert.strictEqual(host.querySelectorAll("small").filter(el=>el.textContent===help).length,1);
   let ta=find("Prompt template");assert(ta);
   ta.value=template;ta.oninput();
-  assert.strictEqual(find("Prompt preview").textContent,"Prompt preview\n"+template);
+  assert(!find("Prompt preview"));
   // A missing used selection stops the actual queue handler before any provider request.
   await button("Queue request").onclick();
   assert.strictEqual(calls.length,0);assert(errors.some(x=>String(x).includes("Choose time of day")));
   change("Time of day","morning");change("Location","living room");change("Subtle face expression","happy");
-  assert.strictEqual(find("Prompt preview").textContent,"Prompt preview\n"+expected);
+  assert(!find("Prompt preview"));
   assert.strictEqual(find("Prompt template").value,template);
   assert(host.querySelectorAll("span").some(el=>el.textContent===expected.length+" characters"));
   button("New").onclick();
-  assert.strictEqual(ui.pList("nbpro")[0].body,template,"New saves the template, not the preview");
+  assert.strictEqual(ui.pList("nbpro")[0].body,template,"New saves the reusable template");
   await button("Queue request").onclick();
   assert.strictEqual(calls.length,1);assert.match(calls[0].url,/gemini-3-pro-image:generateContent$/);
   assert.strictEqual(calls[0].body.contents[0].parts[0].text,expected);
   for (const key of ["time_of_day","location","expression"]) assert(!(key in calls[0].body));
   assert.strictEqual(ui.FORMS.nbpro.prompt,template);
   change("Time of day","night");
-  assert(find("Prompt preview").textContent.includes("At night,"));
+  assert(pro.promptText(ui.FORMS.nbpro).includes("At night,"));
   ta=find("Prompt template");ta.value="Edited: "+template;ta.oninput();title="Edited template";
   button("Edit").onclick();
   assert.strictEqual(ui.pList("nbpro")[0].body,"Edited: "+template);
   ta.value="discard unsaved text";ta.oninput();button("Load").onclick();
   assert.strictEqual(find("Prompt template").value,"Edited: "+template);
-  assert(find("Prompt preview").textContent.includes("Edited: At night,"));
+  assert(pro.promptText(ui.FORMS.nbpro).includes("Edited: At night,"));
   ui.renderService("nb2");
-  assert(!find("Prompt preview"));assert(!find("Time of day"));
+  assert(!find("Prompt preview"));assert(!find("Time of day"));assert(!hasLabelHelp());
   ui.renderService("nbpro");
   assert.strictEqual(find("Time of day").value,"night","selections survive switching models");
   button("Clear inputs").onclick();
   assert.strictEqual(find("Time of day").value,"");
   assert.strictEqual(find("Prompt template").value,"Edited: "+template,"fresh open loads saved template");
-  assert(find("Prompt preview").textContent.includes("{{time_of_day}}"));
+  assert(!find("Prompt preview"));assert(hasLabelHelp());
   // Legacy literal prompts still save, load and queue with all selectors unset.
   ta=find("Prompt template");ta.value="Keep this literal prompt";ta.oninput();title="Literal";button("New").onclick();
   await button("Queue request").onclick();
   assert.strictEqual(calls[1].body.contents[0].parts[0].text,"Keep this literal prompt");
   button("Clear inputs").onclick();
   assert.strictEqual(find("Prompt template").value,"Keep this literal prompt");
-  // Preview uses textContent, so prompt markup remains text rather than HTML.
+  // Prompt markup stays in the input and creates no extra view.
   ta=find("Prompt template");ta.value="<img src=x onerror=alert(1)> {{expression}}";ta.oninput();
-  assert(find("Prompt preview").textContent.includes("<img src=x onerror=alert(1)>"));
-  console.log("ok - actual form selectors, live preview/count, New/Edit/Load, tab retention, reset, legacy prompts and real queue validation/dispatch");
+  assert(find("Prompt template").value.includes("<img src=x onerror=alert(1)>"));
+  assert(!find("Prompt preview"));
+  console.log("ok - actual form selectors, label help without duplicate preview, count, New/Edit/Load, tab retention, reset, legacy prompts and real queue validation/dispatch");
 })().catch(e=>{console.error(e);process.exitCode=1;});
