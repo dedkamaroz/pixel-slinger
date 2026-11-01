@@ -33,7 +33,8 @@ const duration = fields("image_to_video").find(f => f[0] === "duration");
 assert(duration, "image-to-video needs a duration control");
 assert.strictEqual(duration[1], "select");
 assert.deepStrictEqual(duration[3].opts, ["","3","4","5","6","7","8","9","10"]);
-assert.strictEqual(duration[3].def, "", "preserve model-decided duration by default");
+assert.strictEqual(duration[3].def, "8", "default Omni clips to 8 seconds");
+assert(!omni.fields.some(f => f[0] === "previous_interaction_id"));
 const video = fields("reference_to_video").find(f => f[0] === "video");
 assert(video && video[1] === "file", "reference-to-video needs the shared file drop control");
 assert(!fields("image_to_video").some(f => f[0] === "video"));
@@ -41,6 +42,7 @@ assert(!fields("text_to_video").some(f => f[0] === "video"));
 assert.strictEqual(omni.fields.find(f => f[0] === "task")[3].rerender, true);
 
 const shape = body => { const b = {...body}; omni.shape(b); return b; };
+assert.strictEqual(shape({prompt:"Animate",duration:duration[3].def}).response_format.duration,"8s");
 for (const seconds of duration[3].opts.slice(1)) {
   const b = shape({prompt:"Animate", task:"image_to_video", duration:seconds});
   assert.strictEqual(b.response_format.duration, `${seconds}s`);

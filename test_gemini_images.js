@@ -20,8 +20,8 @@ assert.deepStrictEqual(PUBLISHERS.pubGoogleImage.models.map(m => m[0]), models.m
 for (const [id, model, sizes, thinking] of models) {
   const s = SERVICES[id];
   assert.strictEqual(s.geminiImage, model);
-  for (const n of ["prompt","image","images","aspectRatio","responseModalities","seed","candidateCount",
-    ...(id === "nbpro" ? [] : ["temperature","topP","topK","maxOutputTokens","stopSequences","presencePenalty",
+  for (const n of ["prompt","image","images","aspectRatio","seed",
+    ...(id === "nbpro" ? [] : ["responseModalities","candidateCount","temperature","topP","topK","maxOutputTokens","stopSequences","presencePenalty",
       "frequencyPenalty","systemInstruction","safetySettings","generationConfig","requestOptions","history"])])
     assert(spec(s,n), `${id} missing ${n}`);
   assert.deepStrictEqual(spec(s,"imageSize")?.opts, sizes || undefined);
@@ -40,7 +40,7 @@ for (const [id, model, sizes, thinking] of models) {
   assert.deepStrictEqual(b.generationConfig.imageConfig,{aspectRatio:"9:16"});
   assert.strictEqual(b.generationConfig.seed,0);
   assert.strictEqual(b.generationConfig.temperature,0);
-  assert.deepStrictEqual(b.generationConfig.responseModalities,["TEXT","IMAGE"]);
+  assert.deepStrictEqual(b.generationConfig.responseModalities,id === "nbpro" ? ["IMAGE"] : ["TEXT","IMAGE"]);
   assert.deepStrictEqual(b.generationConfig.stopSequences,["END"]);
   assert.deepStrictEqual(b.systemInstruction,{parts:[{text:"Keep texture"}]});
   assert.deepStrictEqual(b.labels,{test:"yes"});
@@ -49,15 +49,21 @@ for (const [id, model, sizes, thinking] of models) {
     assert.throws(()=>s.shape({prompt:"x",...bad}), /JSON|array|object/);
 }
 const pro = SERVICES.nbpro;
-assert.deepStrictEqual(pro.fields.map(f=>f[0]), ["prompt","image","images","aspectRatio","imageSize",
-  "responseModalities","includeThoughts","seed","candidateCount"]);
-assert.deepStrictEqual(["aspectRatio","imageSize","responseModalities","candidateCount"].map(n=>spec(pro,n).def),
-  ["9:16","2K","IMAGE",4]);
+assert.deepStrictEqual(pro.fields.map(f=>f[0]), ["prompt","time_of_day","location","expression","image","images","aspectRatio","imageSize",
+  "seed"]);
+assert.deepStrictEqual(["aspectRatio","imageSize"].map(n=>spec(pro,n).def),
+  ["9:16","2K"]);
 const proDefaults = Object.fromEntries(pro.fields.filter(f=>f[3].def !== undefined && f[3].def !== "").map(f=>[f[0],f[3].def]));
 pro.shape(Object.assign(proDefaults,{prompt:"Edit"}));
 assert.deepStrictEqual(proDefaults.generationConfig.imageConfig,{aspectRatio:"9:16",imageSize:"2K"});
 assert.deepStrictEqual(proDefaults.generationConfig.responseModalities,["IMAGE"]);
-assert.strictEqual(proDefaults.generationConfig.candidateCount,4);
+assert.strictEqual(proDefaults.generationConfig.candidateCount,1);
+assert.strictEqual(proDefaults.generationConfig.thinkingConfig.includeThoughts,false);
+const stalePro = {prompt:"Edit",candidateCount:4,responseModalities:"TEXT,IMAGE",includeThoughts:true};
+pro.shape(stalePro);
+assert.strictEqual(stalePro.generationConfig.candidateCount,1);
+assert.deepStrictEqual(stalePro.generationConfig.responseModalities,["IMAGE"]);
+assert.strictEqual(stalePro.generationConfig.thinkingConfig.includeThoughts,false);
 for (const [id] of models.filter(([id])=>id!=="nbpro")) {
   assert.strictEqual(spec(SERVICES[id],"aspectRatio").def,"");
   assert.strictEqual(spec(SERVICES[id],"responseModalities").def,"TEXT,IMAGE");

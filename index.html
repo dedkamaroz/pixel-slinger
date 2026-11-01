@@ -1444,12 +1444,10 @@ const OMNI_FIELDS = [
     hint:"optional - drop a reference clip up to 3 seconds; max 25 MB for inline input"}],
   ["task","select","Task",{opts:["text_to_video","image_to_video","reference_to_video","edit","extend"],def:"image_to_video",
     rerender:true, hint:"edit / extend act on a previous interaction id; switch to text_to_video for a prompt-only clip"}],
-  ["duration","select","Video length (s)",{opts:["","3","4","5","6","7","8","9","10"],def:"",
+  ["duration","select","Video length (s)",{opts:["","3","4","5","6","7","8","9","10"],def:"8",
     hint:"optional - blank lets the model choose the duration"}],
   ["aspect_ratio","select","Aspect ratio",{opts:["16:9","9:16"],def:"9:16"}],
   ["resolution","select","Resolution",{opts:["360p","720p","1080p","4k"],def:"720p",hint:"1080p and 4k are upscaled"}],
-  ["previous_interaction_id","text","Previous interaction id",{def:"",
-    hint:"optional - chain an edit/extend onto an earlier clip"}],
 ];
 
 const geminiModels = {
@@ -1542,10 +1540,38 @@ async function storeGeminiImage(url, abbr){
   return new URL(new URL(r.local || r.url).pathname, location.origin).href;
 }
 const GEMINI_IMAGE_RATIOS = ["1:1","2:3","3:2","3:4","4:3","4:5","5:4","9:16","16:9","21:9"];
+const PRO_PROMPT_VARIABLES = [
+  ["time_of_day","select","Time of day",{opts:["","morning","day","evening","night"],def:"",rerender:true,
+    hint:"replaces {{time_of_day}} in the prompt template"}],
+  ["location","select","Location",{opts:["","living room","bedroom","kitchen","bathroom","dining room","hallway","backyard","office"],def:"",rerender:true,
+    hint:"replaces {{location}} in the prompt template"}],
+  ["expression","select","Subtle face expression",{opts:["","bored","annoyed","impatient","happy","distracted"],def:"",rerender:true,
+    hint:"replaces {{expression}}; describe it as subtle in your template"}],
+];
+function proPromptText(b, strict=true){
+  return (b.prompt || "").replace(/{{\s*(time_of_day|location|expression)\s*}}/g, (token,key) => {
+    const field = PRO_PROMPT_VARIABLES.find(f => f[0] === key);
+    const value = b[key];
+    if (!value || !field[3].opts.includes(value)) {
+      if (strict) throw new Error(`Choose ${field[2].toLowerCase()} for {{${key}}}`);
+      return token;
+    }
+    return value;
+  });
+}
 const geminiImage = (model, title, abbr, sizes, levels, search=false, wide=false) => ({
-  title, geminiImage:model, abbr, prep:geminiImagePrep, shape:geminiImageShape, results:geminiImageResults,
+  title, geminiImage:model, abbr, prep:geminiImagePrep,
+  shape:b => {
+    if (model === "gemini-3-pro-image") {
+      b.prompt = proPromptText(b);
+      Object.assign(b,{candidateCount:1,responseModalities:"IMAGE",includeThoughts:false});
+    }
+    geminiImageShape(b);
+  }, results:geminiImageResults,
+  promptText:model === "gemini-3-pro-image" ? proPromptText : null,
   fields:[
     ["prompt","textarea","Prompt",{def:"",rows:4,hint:"describe the edit; no image is needed for text-to-image. Put unwanted content in the prompt (no negative-prompt parameter)"}],
+    ...(model === "gemini-3-pro-image" ? PRO_PROMPT_VARIABLES : []),
     ["image","file","Source image",{hint:"optional - PNG, JPEG, WebP, HEIC or HEIF"}],
     ["images","files","Additional reference images",{hint:"up to 14 images total; original Nano Banana works best with at most 3. Entire inline request must be under 20 MB"}],
     ["aspectRatio","select","Aspect ratio",{opts:["",...GEMINI_IMAGE_RATIOS,...(wide ? ["1:4","4:1","1:8","8:1"] : [])],def:model === "gemini-3-pro-image" ? "9:16" : "",hint:"blank lets the model match the input"}],
@@ -1558,7 +1584,7 @@ const geminiImage = (model, title, abbr, sizes, levels, search=false, wide=false
     ["topK","number","Top K",{def:"",min:1,step:1}],
     ["seed","number","Seed",{def:"",min:0,max:2147483647,step:1,hint:"optional; best-effort reproducibility"}],
     ["maxOutputTokens","number","Max output tokens",{def:"",min:1,max:model === "gemini-3.1-flash-lite-image" ? 4096 : 32768,step:1}],
-    ["candidateCount","number","Candidate count",{def:model === "gemini-3-pro-image" ? 4 : "",min:1,step:1,hint:"optional; model-dependent, not a guaranteed number of images"}],
+    ["candidateCount","number","Candidate count",{def:"",min:1,step:1,hint:"optional; model-dependent, not a guaranteed number of images"}],
     ["stopSequences","json","Stop sequences (JSON)",{def:"",rows:2,hint:'optional string array, e.g. ["END"]'}],
     ["presencePenalty","number","Presence penalty",{def:"",min:-2,max:2,step:0.1}],
     ["frequencyPenalty","number","Frequency penalty",{def:"",min:-2,max:2,step:0.1}],
@@ -1570,7 +1596,7 @@ const geminiImage = (model, title, abbr, sizes, levels, search=false, wide=false
     ["generationConfig","json","Advanced generation config (JSON)",{def:"",rows:4,hint:"optional object for every remaining REST generationConfig parameter. Explicit controls above take precedence; support varies by model"}],
     ["requestOptions","json","Advanced request parameters (JSON)",{def:"",rows:4,hint:"optional REST request object: tools, toolConfig, labels, serviceTier, store, continuationToken, etc. Form contents/config take precedence. Unsupported model features return Google errors"}],
   ].filter(([name]) => model !== "gemini-3-pro-image" ||
-    ["prompt","image","images","aspectRatio","imageSize","responseModalities","includeThoughts","seed","candidateCount"].includes(name)),
+    ["prompt","time_of_day","location","expression","image","images","aspectRatio","imageSize","seed"].includes(name)),
 });
 const geminiImageModels = {
   nb21:geminiImage("gemini-nano-banana-2.1","Nano Banana 2.1 - latest image generation and editing","nb21",["1K","2K","4K"],["MINIMAL","MEDIUM","HIGH"],true,true),
@@ -2745,12 +2771,18 @@ function renderService(id, state){
       const t = document.createElement("textarea");
       t.rows = o.rows||4; t.value = state[name] ?? o.def ?? "";
       t.oninput = ()=> state[name] = t.value;
+      const preview = name === "prompt" && svc.promptText ? document.createElement("div") : null;
       // The prompt box, and only that, carries the library and the character count.
       // Titles are never sent anywhere, so they are not counted.
       if (name === "prompt"){
         const cnt = document.createElement("span"); cnt.className = "pcount";
         row.querySelector(".lbl").appendChild(cnt);
-        const apply = v => { state[name] = v; cnt.textContent = v.length + " characters"; };
+        const apply = v => {
+          state[name] = v;
+          const text = svc.promptText ? svc.promptText(state,false) : v;
+          cnt.textContent = text.length + " characters";
+          if (preview) preview.textContent = "Prompt preview\n" + text;
+        };
         t.oninput = ()=> apply(t.value);
         // Save the negative prompt in the same profile for any model that has one.
         const negKey = (svc.fields.find(f => f[0] === "negativePrompt" || f[0] === "negative_prompt") || [])[0];
@@ -2758,6 +2790,15 @@ function renderService(id, state){
         apply(t.value);
       }
       cell.appendChild(t);
+      if (preview) {
+        t.setAttribute("aria-label", "Prompt template");
+        const hint = document.createElement("small"); hint.className = "note";
+        hint.textContent = "Use {{time_of_day}}, {{location}}, {{expression}}. Saved prompts keep these placeholders; selections update the preview below.";
+        cell.appendChild(hint);
+        preview.className = "note"; preview.style.whiteSpace = "pre-wrap";
+        preview.setAttribute("aria-label", "Prompt preview");
+        cell.appendChild(preview);
+      }
     } else {
       const i = document.createElement("input");
       i.type = type;

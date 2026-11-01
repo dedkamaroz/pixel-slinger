@@ -36,8 +36,26 @@ without images generates a new image. Output uses the existing preview, automati
 save, and image post-generation scripts. Inline results are first stored locally;
 thought images are not saved as final images. No provider credentials enter the UI.
 
-Nano Banana Pro defaults to **9:16, 2K, IMAGE, 4 candidates**. Its lower controls
-are reduced to Seed and Candidate Count; the other Gemini forms are unchanged.
+Nano Banana Pro defaults to **9:16, 2K, IMAGE, 1 candidate**, with thoughts off.
+Candidate Count, Response Content and Return Thoughts are hidden; Seed remains editable.
+Other Gemini forms are unchanged.
+
+### Nano Banana Pro prompt variables
+
+Use optional placeholders in the prompt template:
+
+```text
+Set the scene in the {{location}} during the {{time_of_day}},
+with a subtle {{expression}} expression. Preserve the person's identity.
+```
+
+Choose **Time of day**, **Location**, and **Subtle face expression** from the dropdowns.
+The prompt preview updates immediately; the template stays editable. New/Edit save the
+original placeholders, so Load can reuse them with different selections. Choices survive
+switching tabs during the session; Clear inputs resets them. Only placeholders actually
+used in the template require a selection before queueing. Prompts without placeholders
+work as before. The resolved text, not the placeholders or dropdown fields, is sent to Gemini.
+This is currently available only on Nano Banana Pro. Check with `node test_prompt_variables.js`.
 
 On the other models, controls cover aspect ratio, model-specific resolution and thinking levels,
 response modalities, sampling, seed, token/candidate limits, stop sequences,
