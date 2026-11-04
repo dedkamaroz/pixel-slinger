@@ -1,6 +1,9 @@
 // node test_gemini_images.js - offline Gemini image schema and request-path checks.
 const fs = require("fs"), assert = require("assert");
 const html = fs.readFileSync(__dirname + "/index.html", "utf8").replace(/\r\n/g,"\n");
+// The dispatch handler now registers each job for the badges/gallery; stub those globals so
+// the sliced handler/renderService can run outside the page.
+Object.assign(globalThis,{jobStart:()=>({}),jobThumb:()=>{},renderJobsUI:()=>{},svcProvider:()=>null,JOBS:[]});
 const API = "https://apireq.enhancor.ai/api", ARK = "https://ark.ap-southeast.bytepluses.com/api/v3";
 const src = html.slice(html.indexOf("const AREAS"), html.indexOf("const GROUPS"));
 const { SERVICES, PUBLISHERS, ALL_GROUPS, geminiImageResults: imageResults } = eval(src + "\n({SERVICES,PUBLISHERS,ALL_GROUPS,geminiImageResults})");

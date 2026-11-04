@@ -80,6 +80,18 @@
   .badge.ok   { color: #04170C; background: var(--good);    border-color: var(--good); }
   .badge.bad  { color: #2a0b08; background: var(--armed);   border-color: var(--armed); }
   .badge.warn { color: #201c07; background: var(--warning); border-color: var(--warning); }
+  /* live job status, overlaid on the key badge. Defined after .ok/.bad/.warn (equal
+     specificity) so source order makes the tint win while a job runs; it clears back to the
+     key colour when idle. busy = orange pulse, error = red, err-alt = orange<->red while a
+     job is still running elsewhere, err-ack3 = the finite 3-pulse acknowledgement flash. */
+  @keyframes busyPulse { 0%,100%{ background:#C7541F } 50%{ background:#F0731F } }
+  @keyframes errBlink  { 0%,100%{ background:#5e130a } 50%{ background:#F0674A } }
+  @keyframes errAlt    { 0%,49%{ background:#F0731F } 50%,100%{ background:#F0674A } }
+  @keyframes errAck3   { 0%,100%{ background:#2a0b08 } 50%{ background:#F0674A } }
+  .badge.busy      { color:#1b0a03; border-color: var(--hot);   animation: busyPulse 1.3s ease-in-out infinite; }
+  .badge.err-blink { color:#1b0a03; border-color: var(--armed); animation: errBlink 0.9s ease-in-out infinite; }
+  .badge.err-alt   { color:#1b0a03; border-color: var(--armed); animation: errAlt 0.8s step-end infinite; }
+  .badge.err-ack3  { color:#1b0a03; border-color: var(--armed); animation: errAck3 0.33s ease-in-out 3; }
   .crawl { height: 2px; opacity: .5;
     background: repeating-linear-gradient(115deg, rgba(199,84,31,.85) 0 14px, rgba(10,11,12,0) 14px 28px);
     animation: barCrawl 2.4s linear infinite; }
@@ -384,12 +396,32 @@
   .pill { padding: 2px 7px; font-weight: 700; font-size: 11.5px; letter-spacing: .12em; }
   .p-live { background: var(--blue); color: #06202f; }
   .p-err  { background: var(--armed); color: #2a0b08; }
+  .p-busy { background: var(--hot);  color: #1b0a03; }
+  .p-done { background: var(--good); color: #04170C; }
 
   .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px,1fr)); gap: 10px; }
   .card { border: 1px solid var(--line); background: var(--panel); }
   .card img, .card video { width: 100%; display: block; background: #0D1012; }
   .card .meta { padding: 7px 9px; font-size: 12px; color: var(--muted); letter-spacing: .06em; word-break: break-all; }
   .card .meta b { color: var(--hot); display: block; letter-spacing: .16em; }
+  /* ---------- gallery: post-gen console, history rows, thumbnails ---------- */
+  /* the post-gen console mirrors the main #log, but scrolls on its own and only ever holds
+     post-gen script lines */
+  .pgcon { max-height: 220px; overflow: auto; background: #0D1012; border: 1px solid var(--line);
+           padding: 8px 12px; font-size: 13px; line-height: 1.55; }
+  /* request-history rows carry a faint left-edge wash marking the kind */
+  tr.hist.row-img { background: linear-gradient(90deg, rgba(240,115,31,.12), rgba(240,115,31,0) 60%); }
+  tr.hist.row-vid { background: linear-gradient(90deg, rgba(75,156,226,.14), rgba(75,156,226,0) 60%); }
+  td.thcell { width: 92px; }
+  .thumb-m { width: 84px; height: 56px; object-fit: cover; display: block; cursor: zoom-in;
+             background: #0D1012; border: 1px solid var(--line); }
+  .thumb-m:hover { border-color: var(--hot); }
+  /* click a thumbnail -> full-size preview over the page */
+  .lightbox { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center;
+              justify-content: center; padding: 4vh 4vw; cursor: zoom-out;
+              background: rgba(5,6,7,.9); backdrop-filter: blur(3px); }
+  .lightbox img, .lightbox video { max-width: 92vw; max-height: 92vh;
+    box-shadow: 0 0 0 1px rgba(75,156,226,.3), 0 30px 80px rgba(0,0,0,.85); }
   .hide { display: none !important; }
 </style>
 </head>
@@ -422,14 +454,14 @@
 
 <div class="main">
   <div class="wrap">
-    <div class="row full" style="border-bottom:1px solid var(--line)">
+    <div class="row full" id="row-savefolder" style="border-bottom:1px solid var(--line)">
       <div class="lbl">Save folder<small>results land here as &lt;model&gt;_&lt;input filename&gt; - blank = outputs/</small></div>
       <div><input id="out-dir" placeholder="D:\Photos\shoot-01">
         <button class="ghost" id="dir-pick" title="pick the folder your imports come from - results write straight into it, same naming. Chrome/Edge only; re-pick after a refresh">Source folder&hellip;</button>
         <span id="dir-note" class="note"></span></div>
     </div>
 
-    <div class="row full" style="border-bottom:1px solid var(--line)">
+    <div class="row full" id="row-postgen" style="border-bottom:1px solid var(--line)">
       <div class="lbl">Post-gen scripts<small id="pg-hint"></small></div>
       <div id="postgen-vid"></div>
       <div id="postgen-img" style="margin-top:8px"></div>
@@ -501,7 +533,8 @@ function pushLine(ev){
   const d = document.createElement("div");
   d.className = "ln";
   let html = `<span class="ts">${ev.t}</span> <span class="k k-${ev.kind}">${ev.kind.toUpperCase()}</span> ${esc(ev.text)}`;
-  if (SHOW_BODIES && ev.meta && (ev.meta.body !== undefined || ev.meta.headers)){
+  // Error bodies always show (the user asked for the full error); other bodies only with Bodies on.
+  if ((SHOW_BODIES || ev.kind === "err") && ev.meta && (ev.meta.body !== undefined || ev.meta.headers)){
     let parts = [];
     if (ev.meta.headers) parts.push("headers " + JSON.stringify(ev.meta.headers));
     if (ev.meta.body !== undefined && ev.meta.body !== null)
@@ -520,7 +553,38 @@ function local(kind, text, meta){
 }
 function esc(s){ return String(s).replace(/[&<>]/g, c=>({ "&":"&amp;","<":"&lt;",">":"&gt;" }[c])); }
 
-new EventSource("/events").onmessage = e => pushLine(JSON.parse(e.data));
+/* ---------- post-gen console (shown on the Gallery tab) ---------- */
+// The server tags post-gen script lines postgen:true; they are routed here instead of the
+// main console, so each console carries only its own kind of activity. Buffered because the
+// gallery pane is rebuilt on each visit - the buffer replays into it.
+const PGLOG = [];
+function pgLineHtml(ev){
+  return `<span class="ts">${ev.t}</span> <span class="k k-${ev.kind}">${ev.kind.toUpperCase()}</span> ${esc(ev.text)}`;
+}
+function pgConsoleAppend(ev){
+  PGLOG.push(ev);
+  while (PGLOG.length > 500) PGLOG.shift();
+  const box = document.getElementById("pg-console");
+  if (!box) return;   // gallery not open; it replays from PGLOG when next rendered
+  const stuck = box.scrollTop + box.clientHeight >= box.scrollHeight - 40;
+  const d = document.createElement("div"); d.className = "ln"; d.innerHTML = pgLineHtml(ev);
+  box.appendChild(d);
+  if (stuck) box.scrollTop = box.scrollHeight;
+}
+function renderPgConsole(){
+  const box = document.getElementById("pg-console");
+  if (!box) return;
+  box.innerHTML = PGLOG.length
+    ? PGLOG.map(ev => `<div class="ln">${pgLineHtml(ev)}</div>`).join("")
+    : `<div class="note">No post-gen script activity yet.</div>`;
+  box.scrollTop = box.scrollHeight;
+}
+
+new EventSource("/events").onmessage = e => {
+  const ev = JSON.parse(e.data);
+  if (ev.meta && ev.meta.postgen) pgConsoleAppend(ev);   // post-gen -> its own console only
+  else pushLine(ev);
+};
 document.getElementById("c-clear").onclick = ()=>{ logEl.innerHTML=""; LINES=0; document.getElementById("c-count").textContent="0 lines"; };
 document.getElementById("c-copy").onclick = ()=> navigator.clipboard.writeText(logEl.innerText);
 document.getElementById("c-wrap").onclick = e =>{ SHOW_BODIES=!SHOW_BODIES; e.target.textContent="Bodies: "+(SHOW_BODIES?"on":"off"); };
@@ -545,6 +609,140 @@ async function uploadFile(file){
   if (r.error){ local("err","upload failed: "+r.error); return null; }
   if (!r.reachable) local("warn","tunnel is down - the provider cannot fetch this URL. Start cloudflared, then restart the server.");
   return r;
+}
+
+/* ---------- job registry: live status for the badges + gallery ---------- */
+// One entry per "Queue request". The provider badges and the Gallery history table both
+// read this one list - not two parallel status systems. Session only: a reload starts
+// empty (in-flight jobs can't resume polling anyway). The coarse state (busy/done/error)
+// is read back off the tab's own status line (job.el) rather than threaded through every
+// poll: each service id has its own status span, so jobs on different providers - the case
+// the badges care about - read right. The live status text shown in the gallery is that
+// same line's text.
+// ponytail: state is inferred from job.el's class/text; two concurrent runs of the *same*
+// model share one status span, so they'd read each other's state. Thread an explicit
+// jobFail/jobSet through the trackers if same-model concurrency ever needs to be exact.
+const JOBS = [];
+let JOB_SEQ = 0;
+let CUR_PROVIDER = null;   // provider of the on-screen tab - opening it acks that provider's error
+let CUR_KIND = "image";    // image|video of the on-screen tab, from its nav group
+let GALLERY_OPEN = false;
+
+/* JOBTEST-START - pure, offline-testable (test_job_status.js) */
+// Which provider (and key-badge id) a service posts to. Enhancor (`base`) is off -> null.
+function svcProvider(svc){
+  if (!svc) return null;
+  if (svc.fal) return ["fal","b-fal"];
+  if (svc.bria || svc.briav1) return ["bria","b-bria"];
+  if (svc.bfl) return ["bfl","b-bfl"];
+  if (svc.kling) return ["kling","b-kling"];
+  if (svc.qwen || svc.qwenImage) return ["qwen","b-qwen"];
+  if (svc.ark || svc.arkImage) return ["ark","b-ark"];
+  if (svc.veo || svc.omni || svc.geminiImage) return ["gemini","b-gemini"];
+  return null;
+}
+// The model name for the history table: the service title without its " - <endpoint>" tail.
+function svcModel(svc){
+  let t = (svc && (svc.title || svc.model)) || "?";
+  const dash = t.indexOf(" - ");
+  return dash > 0 ? t.slice(0, dash) : t;
+}
+// The tint class a provider's badge should carry, or null for idle (idle keeps the key
+// colour). "busy" pulses orange; an unacknowledged error pulses red, or alternates
+// orange<->red while a job is still running - but only while the user is on another
+// provider's tab. Opening the provider's own tab acknowledges the error (errAck), so this
+// returns to busy/idle there.
+function badgeTint(jobs, provider, onThisProvider){
+  let active = false, errU = false;
+  for (const j of jobs){
+    if (j.provider !== provider) continue;
+    if (j.state === "busy") active = true;
+    else if (j.state === "error" && !j.errAck) errU = true;
+  }
+  if (errU && !onThisProvider) return active ? "err-alt" : "err-blink";
+  if (active) return "busy";
+  return null;
+}
+/* JOBTEST-END */
+
+const PROV_BADGES = [["fal","b-fal"],["ark","b-ark"],["kling","b-kling"],
+  ["qwen","b-qwen"],["gemini","b-gemini"],["bria","b-bria"],["bfl","b-bfl"]];
+
+// A job's coarse state, read off its status line. Once terminal it is frozen on the job so
+// a later run that reuses the same status span can't flip a finished row back to busy.
+function jobState(j){
+  if (j.state === "done" || j.state === "error") return j.state;
+  if (j.forcedDone) return "done";
+  const el = j.el;
+  if (el){
+    if (/\bbad\b/.test(el.className)) return "error";
+    if (/timed out/i.test(el.textContent || "")) return "error";
+    if (/\bDONE\b/.test(el.textContent || "")) return "done";
+  }
+  return "busy";
+}
+// The live text the gallery shows for a job.
+function jobText(j){
+  if (j.state === "error") return j.statusText || (j.el && j.el.textContent) || "error";
+  if (j.state === "done")  return (j.el && j.el.textContent) || "done";
+  return (j.el && j.el.textContent) || "queued";
+}
+
+// Overlay the job tint on each provider badge without disturbing the key text/colour that
+// refreshConfig owns. err-ack3 is left alone to finish its own finite flash.
+function applyBadgeStates(){
+  for (const [prov, bid] of PROV_BADGES){
+    const el = document.getElementById(bid);
+    if (!el || el.classList.contains("err-ack3")) continue;
+    el.classList.remove("busy","err-blink","err-alt");
+    const tint = badgeTint(JOBS, prov, prov === CUR_PROVIDER);
+    if (tint) el.classList.add(tint);
+  }
+}
+// The "pulse red 3 times then return to normal" acknowledgement flash.
+function badgeAck3(bid){
+  const el = document.getElementById(bid);
+  if (!el) return;
+  el.classList.remove("busy","err-blink","err-alt");
+  el.classList.add("err-ack3");
+  el.addEventListener("animationend", function h(){
+    el.classList.remove("err-ack3");
+    el.removeEventListener("animationend", h);
+    applyBadgeStates();
+  }, { once:true });
+}
+
+// Recompute every job's state, fire the on-tab error flash on the busy->error edge, repaint
+// the badges, and (if the gallery is open) the history table.
+function renderJobsUI(){
+  for (const j of JOBS){
+    const prev = j.state;
+    const s = jobState(j);
+    if (s === "error" && prev !== "error"){
+      j.state = "error";
+      if (j.provider === CUR_PROVIDER){ j.errAck = true; if (j.badge) badgeAck3(j.badge); }
+    } else {
+      j.state = s;
+    }
+  }
+  applyBadgeStates();
+  if (GALLERY_OPEN && typeof renderHistory === "function") renderHistory();
+}
+// Nudge the badges while anything is in flight, so a tracker's error/done tint appears
+// within a second rather than waiting on the 5s config poll. Idle when nothing is running.
+setInterval(()=>{ if (JOBS.some(j => j.state === "busy")) renderJobsUI(); }, 1000);
+
+function jobStart(svc, statusEl){
+  const pb = svcProvider(svc);
+  const job = { id:++JOB_SEQ, provider: pb && pb[0], badge: pb && pb[1],
+    model: svcModel(svc), kind: CUR_KIND, state:"busy", statusText:"queued",
+    thumbUrl:null, thumbVid:false, forcedDone:false, errAck:false, el:statusEl, t:new Date() };
+  JOBS.push(job);
+  renderJobsUI();
+  return job;
+}
+function jobThumb(job, previewUrl, isVid){
+  if (job && !job.thumbUrl){ job.thumbUrl = previewUrl; job.thumbVid = !!isVid; job.forcedDone = true; renderJobsUI(); }
 }
 
 /* ---------- config ---------- */
@@ -576,6 +774,9 @@ async function refreshConfig(){
   pgBuild(CFG.postgenVideo || [], CFG.postgenImage || [], CFG.maxPostgen || 3);
   t.textContent = "TUNNEL " + CFG.tunnel.toUpperCase();
   t.className = "badge " + ({up:"ok", starting:"warn", missing:"bad", down:"bad", off:"warn"}[CFG.tunnel] || "");
+  // refreshConfig owns each key badge's text and base colour; re-overlay any live job tint
+  // it just cleared off.
+  applyBadgeStates();
 }
 refreshConfig(); setInterval(refreshConfig, 5000);
 
@@ -2408,6 +2609,18 @@ function render(id){
   GROUPS.forEach(g=> g.btn.classList.toggle("armed",
     g.items.length ? g.items.some(([n])=> n === id) : id === "gallery"));
   navEl.querySelectorAll(".prow a").forEach(a=> a.classList.toggle("on", a.dataset.id === id));
+  // The nav group a tab belongs to decides whether its jobs count as image or video (used for
+  // the history row colour). Works for both a plain service id and a publisher id - both sit
+  // in g.items. renderService sets the provider once the service is known; null it here so
+  // the gallery and any unmatched tab carry no provider.
+  const g0 = GROUPS.find(g => g.items.some(([n]) => n === id));
+  CUR_KIND = g0 && /VIDEO/.test(g0.label) ? "video" : "image";
+  CUR_PROVIDER = null;
+  GALLERY_OPEN = id === "gallery";
+  // The save-folder and post-gen pickers are unused on the Gallery tab - hide the whole strip
+  // there, keep it on every generation tab where it is set each time.
+  document.getElementById("row-savefolder").style.display = GALLERY_OPEN ? "none" : "";
+  document.getElementById("row-postgen").style.display = GALLERY_OPEN ? "none" : "";
   pgShow(id);
   pane.innerHTML = "";
   pane.scrollTop = 0;   // a page arrived at from another one has to start at its own top
@@ -2635,6 +2848,10 @@ const FORMS = {}, OUTS = {}, STATUS = {};
 
 function renderService(id, state){
   const svc = SERVICES[id];
+  // Opening a provider's tab acknowledges any error on that provider, clearing its red tint.
+  CUR_PROVIDER = (svcProvider(svc) || [null])[0];
+  JOBS.forEach(j => { if (j.provider === CUR_PROVIDER && j.state === "error") j.errAck = true; });
+  renderJobsUI();
   state = state || FORMS[id];
   const fresh = !state;              // first open of this tab, not a re-render
   // Seed defaults once, then keep the same object across re-renders so switching
@@ -2877,6 +3094,7 @@ function renderService(id, state){
     catch(e){ status.className="note bad"; status.textContent="invalid inputs";
               local("err", e.message); send.disabled=false; return; }
     status.textContent = "queuing...";
+    const job = jobStart(svc, status);   // registers it for the badges + gallery
     // fal queues at the endpoint id itself and polls; Enhancor queues at /queue and webhooks;
     // BytePlus takes the model in the body, so one endpoint serves every model it hosts.
     const ark = svc.ark || svc.arkImage;
@@ -2915,7 +3133,8 @@ function renderService(id, state){
                       { autoWebhook:false, headers: svc.qwen ? { "X-DashScope-Async": "enable" } : undefined })
       : await callApi(`${svc.base}/queue`, body);
     send.disabled = false;
-    if (!r.ok){ status.textContent = `failed (${r.status})`; status.className="note bad"; return; }
+    if (!r.ok){ status.textContent = `failed (${r.status})`; status.className="note bad"; renderJobsUI(); return; }
+    local("sys", "request submitted");   // the full request/response dump is gone; this is the confirmation
     const j = r.json || {};
     const abbr = outAbbr(svc, state);
     const input = inputName(svc, state);
@@ -2925,12 +3144,12 @@ function renderService(id, state){
       if (!urls.length){
         status.className="note bad";
         status.textContent = "no image: " + (j.promptFeedback?.blockReason || j.candidates?.[0]?.finishReason || "text-only response");
-        local("err", `Gemini returned no image: ${JSON.stringify(j).slice(0,1000)}`); return;
+        local("err", `Gemini returned no image: ${JSON.stringify(j).slice(0,1000)}`); renderJobsUI(); return;
       }
       try {
-        for (const u of urls) showResult(out, await storeGeminiImage(u, abbr), svc.geminiImage, abbr, input);
+        for (const u of urls) showResult(out, await storeGeminiImage(u, abbr), svc.geminiImage, abbr, input, { job });
         status.textContent=`DONE (${urls.length})`;
-      } catch(e){ status.className="note bad"; status.textContent="image storage failed"; local("err",e.message); }
+      } catch(e){ status.className="note bad"; status.textContent="image storage failed"; local("err",e.message); renderJobsUI(); }
       return;
     }
     // Veo hands back a long-running operation name to poll; Omni is synchronous and the one
@@ -2938,11 +3157,11 @@ function renderService(id, state){
     if (svc.veo){
       const op = j.name || "";
       if (!op){ status.className = "note bad"; status.textContent = "no operation in response";
-                local("err", `veo: no operation name: ${(r.text||"").slice(0,300)}`); return; }
+                local("err", `veo: no operation name: ${(r.text||"").slice(0,300)}`); renderJobsUI(); return; }
       status.textContent = `${op.split("/").pop()} queued`;
-      trackVeo(op, status, out, abbr, input); return;
+      trackVeo(op, status, out, abbr, input, job); return;
     }
-    if (svc.omni){ status.textContent = "generating..."; trackOmni(j, status, out, abbr, input); return; }
+    if (svc.omni){ status.textContent = "generating..."; trackOmni(j, status, out, abbr, input, job); return; }
     // Synchronous image paths: ModelArk, QwenCloud, and Bria's v1 automotive routes all
     // carry the result in this one response (Bria v1 at top-level url, via results()).
     if (svc.arkImage || svc.qwenImage || svc.briav1){
@@ -2950,10 +3169,10 @@ function renderService(id, state){
       const who = svc.model || svc.briav1;
       if (!urls.length){
         status.className = "note bad"; status.textContent = "no image in the response";
-        local("err", `${who} returned no image: ${(r.text||"").slice(0,300)}`); return;
+        local("err", `${who} returned no image: ${(r.text||"").slice(0,300)}`); renderJobsUI(); return;
       }
       status.className = "note"; status.textContent = `DONE (${urls.length})`;
-      urls.forEach(u => showResult(out, u, who, abbr, input));
+      urls.forEach(u => showResult(out, u, who, abbr, input, { job }));
       return;
     }
     // Kling's and QwenCloud's top-level request_id names the HTTP call, not the job - the
@@ -2962,14 +3181,14 @@ function renderService(id, state){
               : svc.qwen  ? (j.output || {}).task_id
               : (j.requestId || j.request_id || j.id);
     status.className = "note"; status.textContent = `request ${rid||"?"} queued`;
-    if (!rid) return;
-    if (svc.fal) trackFal(svc, j, status, out, abbr, input);
-    else if (svc.bria) trackBria(svc, j, status, out, abbr, input);
-    else if (svc.bfl) trackBfl(svc, j, status, out, abbr, input);
-    else if (svc.kling) trackKling(rid, status, out, abbr, input);
-    else if (svc.qwen) trackQwen(rid, status, out, abbr, input);
-    else if (svc.ark) trackArk(svc, rid, status, out, abbr, input);
-    else trackRequest(svc.base, rid, r.webhookToken, status, out, abbr, input);
+    if (!rid){ renderJobsUI(); return; }
+    if (svc.fal) trackFal(svc, j, status, out, abbr, input, job);
+    else if (svc.bria) trackBria(svc, j, status, out, abbr, input, job);
+    else if (svc.bfl) trackBfl(svc, j, status, out, abbr, input, job);
+    else if (svc.kling) trackKling(rid, status, out, abbr, input, job);
+    else if (svc.qwen) trackQwen(rid, status, out, abbr, input, job);
+    else if (svc.ark) trackArk(svc, rid, status, out, abbr, input, job);
+    else trackRequest(svc.base, rid, r.webhookToken, status, out, abbr, input, job);
   };
 }
 
@@ -2991,7 +3210,7 @@ function inputName(svc, state){
 }
 
 /* ---------- polling ---------- */
-async function trackRequest(base, requestId, token, statusEl, outEl, abbr, input){
+async function trackRequest(base, requestId, token, statusEl, outEl, abbr, input, job){
   for (let i=0; i<150; i++){
     await new Promise(r=> setTimeout(r, 4000));
     const r = await callApi(`${base}/status`, { request_id: requestId }, { autoWebhook:false });
@@ -3001,7 +3220,7 @@ async function trackRequest(base, requestId, token, statusEl, outEl, abbr, input
     const url = hook?.result || j.result || j.output || j.url;
     if (url){
       reportFal({ text: JSON.stringify(hook||j) + " " + url, headers: r.headers }, requestId);
-      statusEl.textContent = `${requestId} :: DONE`; showResult(outEl, url, requestId, abbr, input); return;
+      statusEl.textContent = `${requestId} :: DONE`; showResult(outEl, url, requestId, abbr, input, { job }); return;
     }
     if (["FAILED","ERROR"].includes(j.status)){ statusEl.className="note bad"; return; }
     if (j.status === "COMPLETED" && !url && i>2){
@@ -3015,7 +3234,7 @@ async function trackRequest(base, requestId, token, statusEl, outEl, abbr, input
 // No webhook on this path: submit hands back status_url and response_url, both GETs.
 // Using the URLs fal returns rather than building them - for a nested endpoint id
 // (bytedance/seedream/v5/pro/edit) the request path is not the endpoint id.
-async function trackFal(svc, sub, statusEl, outEl, abbr, input){
+async function trackFal(svc, sub, statusEl, outEl, abbr, input, job){
   const get = url => callApi(url, null, { method:"GET", autoWebhook:false });
   for (let i=0; i<150; i++){
     await new Promise(r=> setTimeout(r, 4000));
@@ -3051,7 +3270,7 @@ async function trackFal(svc, sub, statusEl, outEl, abbr, input){
       return;
     }
     statusEl.textContent = `${sub.request_id} :: DONE (${urls.length})`;
-    urls.forEach(u => showResult(outEl, u, sub.request_id, abbr, input));
+    urls.forEach(u => showResult(outEl, u, sub.request_id, abbr, input, { job }));
     return;
   }
   statusEl.textContent = `${sub.request_id} :: timed out polling`;
@@ -3061,7 +3280,7 @@ async function trackFal(svc, sub, statusEl, outEl, abbr, input){
 // Submit returns {request_id, status_url}; the status GET (api_token added by the proxy)
 // carries result.image_url inline on COMPLETED - no separate response fetch, unlike fal.
 // Every route is async; some also accept sync, but one async path keeps them uniform.
-async function trackBria(svc, sub, statusEl, outEl, abbr, input){
+async function trackBria(svc, sub, statusEl, outEl, abbr, input, job){
   const id = sub.request_id || "?";
   for (let i=0; i<150; i++){
     await new Promise(r=> setTimeout(r, 4000));
@@ -3082,7 +3301,7 @@ async function trackBria(svc, sub, statusEl, outEl, abbr, input){
       local("err", `${id} completed but carried no image: ${(s.text||"").slice(0,300)}`); return;
     }
     statusEl.textContent = `${id} :: DONE (${urls.length})`;
-    urls.forEach(u => showResult(outEl, u, id, abbr, input));
+    urls.forEach(u => showResult(outEl, u, id, abbr, input, { job }));
     return;
   }
   statusEl.textContent = `${id} :: timed out polling`;
@@ -3092,7 +3311,7 @@ async function trackBria(svc, sub, statusEl, outEl, abbr, input){
 // Submit returns {id, polling_url}; the status GET (x-key added by the proxy) carries
 // result.sample on "Ready". Result URLs are signed and expire in ~10 min, so showResult
 // saves on sight. The moderation and error states below are terminal and end the poll.
-async function trackBfl(svc, sub, statusEl, outEl, abbr, input){
+async function trackBfl(svc, sub, statusEl, outEl, abbr, input, job){
   const id = sub.id || "?", url = sub.polling_url;
   if (!url){ statusEl.className = "note bad"; statusEl.textContent = `${id} :: no polling_url in response`; return; }
   for (let i=0; i<150; i++){
@@ -3114,7 +3333,7 @@ async function trackBfl(svc, sub, statusEl, outEl, abbr, input){
       local("err", `${id} ready but carried no image: ${(s.text||"").slice(0,300)}`); return;
     }
     statusEl.textContent = `${id} :: DONE (${urls.length})`;
-    urls.forEach(u => showResult(outEl, u, id, abbr, input));
+    urls.forEach(u => showResult(outEl, u, id, abbr, input, { job }));
     return;
   }
   statusEl.textContent = `${id} :: timed out polling`;
@@ -3123,7 +3342,7 @@ async function trackBfl(svc, sub, statusEl, outEl, abbr, input){
 /* ---------- BytePlus polling ---------- */
 // One GET per tick until the task is terminal. Result URLs are signed and expire, which is
 // why showResult saves on sight rather than waiting for a click.
-async function trackArk(svc, id, statusEl, outEl, abbr, input){
+async function trackArk(svc, id, statusEl, outEl, abbr, input, job){
   for (let i=0; i<300; i++){
     await new Promise(r=> setTimeout(r, 4000));
     const r = await callApi(`${ARK}/contents/generations/tasks/${id}`, null,
@@ -3150,7 +3369,7 @@ async function trackArk(svc, id, statusEl, outEl, abbr, input){
       return;
     }
     statusEl.textContent = `${id} :: DONE`;
-    urls.forEach(u => showResult(outEl, u, id, abbr, input));
+    urls.forEach(u => showResult(outEl, u, id, abbr, input, { job }));
     // Only present when the form asked for it - the chaining frame for the next clip.
     if (j.content && j.content.last_frame_url)
       showResult(outEl, j.content.last_frame_url, id + "-last", abbr, input);
@@ -3162,7 +3381,7 @@ async function trackArk(svc, id, statusEl, outEl, abbr, input){
 /* ---------- Kling polling ---------- */
 // One GET covers every Kling model. 4k and 15s jobs run long, hence the longer ceiling
 // than fal's - 450 ticks is half an hour.
-async function trackKling(id, statusEl, outEl, abbr, input){
+async function trackKling(id, statusEl, outEl, abbr, input, job){
   for (let i=0; i<450; i++){
     await new Promise(r=> setTimeout(r, 4000));
     const r = await callApi(`${KLING}/tasks?task_ids=${encodeURIComponent(id)}`, null,
@@ -3189,7 +3408,7 @@ async function trackKling(id, statusEl, outEl, abbr, input){
       return;
     }
     statusEl.textContent = `${id} :: DONE (${urls.length})`;
-    urls.forEach(u => showResult(outEl, u, id, abbr, input));
+    urls.forEach(u => showResult(outEl, u, id, abbr, input, { job }));
     return;
   }
   statusEl.textContent = `${id} :: timed out polling`;
@@ -3198,7 +3417,7 @@ async function trackKling(id, statusEl, outEl, abbr, input){
 /* ---------- QwenCloud polling ---------- */
 // GET /tasks/{id} until task_status is terminal. Their sample 1080p run took twelve minutes
 // end to end and 30s clips run longer, so the ceiling matches Kling's half hour.
-async function trackQwen(id, statusEl, outEl, abbr, input){
+async function trackQwen(id, statusEl, outEl, abbr, input, job){
   for (let i=0; i<450; i++){
     await new Promise(r=> setTimeout(r, 4000));
     const r = await callApi(`${QWEN}/tasks/${encodeURIComponent(id)}`, null,
@@ -3223,7 +3442,7 @@ async function trackQwen(id, statusEl, outEl, abbr, input){
       return;
     }
     statusEl.textContent = `${id} :: DONE`;
-    showResult(outEl, o.video_url, id, abbr, input);
+    showResult(outEl, o.video_url, id, abbr, input, { job });
     return;
   }
   statusEl.textContent = `${id} :: timed out polling`;
@@ -3232,7 +3451,7 @@ async function trackQwen(id, statusEl, outEl, abbr, input){
 /* ---------- Veo polling ---------- */
 // GET the operation until done. Generation runs 11s to ~6 min, so the ceiling is generous.
 // The result uri is key-gated: preview through /api/blob, which the proxy auths by host.
-async function trackVeo(opName, statusEl, outEl, abbr, input){
+async function trackVeo(opName, statusEl, outEl, abbr, input, job){
   const short = opName.split("/").pop();
   for (let i=0; i<300; i++){
     await new Promise(r=> setTimeout(r, 8000));
@@ -3256,7 +3475,7 @@ async function trackVeo(opName, statusEl, outEl, abbr, input){
     }
     statusEl.textContent = `${short} :: DONE (${uris.length})`;
     uris.forEach(u => showResult(outEl, u, short, abbr, input,
-      { video:true, previewUrl: blobUrl(u) }));
+      { video:true, previewUrl: blobUrl(u), job }));
     return;
   }
   statusEl.textContent = `${short} :: timed out polling`;
@@ -3283,7 +3502,7 @@ function omniFindFile(scope){
   })(scope);
   return found;
 }
-async function trackOmni(interaction, statusEl, outEl, abbr, input){
+async function trackOmni(interaction, statusEl, outEl, abbr, input, job){
   // The interaction id (not the file id) is what edit/extend needs as previous_interaction_id,
   // so surface it - in the console and on the result card - or the chaining field is unusable.
   const iid = interaction && interaction.id;
@@ -3306,7 +3525,7 @@ async function trackOmni(interaction, statusEl, outEl, abbr, input){
     if (f.state === "ACTIVE"){
       const dl = `${GEMINI}/${fileId}:download?alt=media`;
       statusEl.textContent = `${short} :: DONE`;
-      showResult(outEl, dl, label, abbr, input, { video:true, previewUrl: blobUrl(dl) });
+      showResult(outEl, dl, label, abbr, input, { video:true, previewUrl: blobUrl(dl), job });
       return;
     }
     await new Promise(r=> setTimeout(r, 4000));
@@ -3317,6 +3536,7 @@ async function trackOmni(interaction, statusEl, outEl, abbr, input){
 function showResult(el, url, id, abbr, input, opts={}){
   const isVid = opts.video || /\.(mp4|webm|mov)(\?|$)/i.test(url);
   const preview = opts.previewUrl || url;    // key-gated downloads preview through /api/blob
+  jobThumb(opts.job, preview, isVid);        // first result becomes the gallery thumbnail + marks the job done
   const c = document.createElement("div"); c.className="card"; c.style.marginTop="12px"; c.style.maxWidth="420px";
   // esc() the preview src and build the meta via textContent: id/url can come straight from a
   // provider's JSON (Gemini operation/file ids, result URIs), so never put them in innerHTML raw.
@@ -3370,43 +3590,60 @@ function reportFal(res, context){
 }
 
 /* ---------- gallery ---------- */
-async function renderGallery(){
-  pane.innerHTML = `<div class="category">Results</div><div class="cards" id="g-cards"></div>
-    <div class="category" style="margin-top:16px">Request history</div>
-    <table><thead><tr><th>Time (AEST)</th><th>Endpoint</th><th>Status</th><th>Request ID</th></tr></thead><tbody id="g-h"></tbody></table>`;
-  const d = await (await fetch("/api/results")).json();
-  const cards = document.getElementById("g-cards");
-  const entries = Object.entries(d.results);
-  if (!entries.length) cards.innerHTML = `<p class="note">No webhook results yet.</p>`;
-  entries.reverse().forEach(([tok, res])=>{
-    const url = res.result || res.output || res.url;
-    if (!url) return;
-    const isVid = /\.(mp4|webm|mov)(\?|$)/i.test(url);
-    const c = document.createElement("div"); c.className="card";
-    c.innerHTML = `${isVid?`<video src="${url}" controls></video>`:`<img src="${url}">`}
-      <div class="meta"><b>${res.request_id||tok}</b>${res.status||""}<br>${url}</div>`;
-    const b = document.createElement("button"); b.className="ghost"; b.textContent="Save"; b.style.margin="0 9px 9px";
-    // No form state here, so no input filename to name it after - folder only.
-    b.onclick = async ()=>{
-      if (srcDir && !postGen(isVid).length){
-        try { await srcSave(url, null); b.textContent = "Saved"; }
-        catch(e){ b.textContent = "Failed"; local("err", "save failed: " + e.message); }
-        return;
-      }
-      const r = await post("/api/save", { url, dir: outDir(), scripts: postGen(isVid), chain: pgChain(isVid) });
-      b.textContent = r.path ? "Saved" : "Failed";
-    };
-    c.appendChild(b); cards.appendChild(c);
-  });
+// Two live views, both fed from the session's own state rather than the server: the history
+// table reads the JOBS registry (so it shows live status + the result thumbnail), and the
+// post-gen console replays PGLOG (post-gen script lines, routed out of the main console).
+function renderGallery(){
+  pane.innerHTML =
+    `<div class="category">Post-gen console</div>
+     <div id="pg-console" class="pgcon"></div>
+     <div class="category" style="margin-top:16px">Request history</div>
+     <table><thead><tr><th>Time (AEST)</th><th>Model</th><th>Status</th><th>Output</th></tr></thead>
+       <tbody id="g-h"></tbody></table>`;
+  renderPgConsole();
+  renderJobsUI();   // GALLERY_OPEN is already true, so this fills #g-h and refreshes states
+}
+
+// Newest first. Row colour marks the kind (image orange / video blue); the status pill
+// follows the job's live state; the Output cell is the result thumbnail, click to enlarge.
+function renderHistory(){
   const tb = document.getElementById("g-h");
-  d.history.slice().reverse().forEach(h=>{
+  if (!tb) return;
+  tb.innerHTML = "";
+  if (!JOBS.length){
+    tb.innerHTML = `<tr><td colspan="4" class="note">No requests this session.</td></tr>`;
+    return;
+  }
+  JOBS.slice().reverse().forEach(j=>{
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td class="mono">${h.ts.replace("T"," ").slice(0,19)}</td>
-      <td class="mono">${esc(h.url.replace(API,""))}</td>
-      <td><span class="pill ${h.status<300?"p-live":"p-err"}">${h.status}</span></td>
-      <td class="mono">${h.requestId||"-"}</td>`;
+    tr.className = "hist " + (j.kind === "video" ? "row-vid" : "row-img");
+    const pill = j.state === "done" ? "p-done" : j.state === "error" ? "p-err" : "p-busy";
+    tr.innerHTML =
+      `<td class="mono">${j.t.toTimeString().slice(0,8)}</td>` +
+      `<td>${esc(j.model)}</td>` +
+      `<td><span class="pill ${pill}">${esc(jobText(j))}</span></td>` +
+      `<td class="thcell"></td>`;
+    const tc = tr.querySelector(".thcell");
+    if (j.thumbUrl){
+      const m = document.createElement(j.thumbVid ? "video" : "img");
+      m.src = j.thumbUrl; m.className = "thumb-m";
+      if (j.thumbVid) m.muted = true;
+      m.onclick = ()=> lightbox(j.thumbUrl, j.thumbVid);
+      tc.appendChild(m);
+    } else {
+      tc.textContent = j.state === "error" ? "-" : "...";
+    }
     tb.appendChild(tr);
   });
+}
+
+// A finished result at full size. Click anywhere to dismiss.
+function lightbox(url, isVid){
+  const ov = document.createElement("div"); ov.className = "lightbox";
+  ov.innerHTML = isVid ? `<video src="${esc(url)}" controls autoplay></video>`
+                       : `<img src="${esc(url)}" alt="result preview">`;
+  ov.onclick = ()=> ov.remove();
+  document.body.appendChild(ov);
 }
 
 render(GROUPS[0].items[0][0]);

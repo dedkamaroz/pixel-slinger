@@ -5,6 +5,9 @@
 const fs = require("fs"), assert = require("assert");
 
 const html = fs.readFileSync(__dirname + "/index.html", "utf8");
+// The dispatch handler now registers each job for the badges/gallery; stub those globals so
+// the sliced handler can run outside the page.
+Object.assign(globalThis,{jobStart:()=>({}),jobThumb:()=>{},renderJobsUI:()=>{},svcProvider:()=>null,JOBS:[]});
 
 // Fake the two globals the store block touches. localStorage is the real contract here.
 const store = {};

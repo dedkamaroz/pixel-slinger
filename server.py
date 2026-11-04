@@ -454,10 +454,9 @@ def call_api(method, url, body, extra_headers=None):
     headers.update(extra_headers or {})
     payload = json.dumps(body).encode() if body is not None else None
 
-    log("req", f"{method} {url}", {
-        "headers": {k: (redact(v, key) if k == secret_hdr else v) for k, v in headers.items()},
-        "body": body,
-    })
+    # The per-call request/response dump used to go to the console on every submit and every
+    # poll. It is gone now: a successful call logs nothing (the page shows "request submitted"
+    # and its own live status), and only a failure is logged - with the full error body.
     started = time.time()
     req = urllib.request.Request(url, data=payload, headers=headers, method=method)
     try:
@@ -477,8 +476,9 @@ def call_api(method, url, body, extra_headers=None):
         parsed = json.loads(raw)
     except ValueError:
         parsed = None
-    log("res" if status < 400 else "err", f"{status} {method} {url} ({ms}ms)",
-        {"headers": resp_headers, "body": parsed if parsed is not None else raw[:4000]})
+    if status >= 400:
+        log("err", f"{status} {method} {url} ({ms}ms)",
+            {"headers": resp_headers, "body": parsed if parsed is not None else raw})
     return {"ok": status < 400, "status": status, "ms": ms,
             "json": parsed, "text": raw[:20000], "headers": resp_headers}
 
@@ -557,7 +557,7 @@ def run_script(cmd, path):
     exe, rest = Path(argv[0]), argv[1:]
     args = ([a.replace("{}", str(path)) for a in rest] if any("{}" in a for a in rest)
             else rest + [str(path)])
-    log("sys", f"{exe.stem} <- {path}")
+    log("sys", f"{exe.stem} <- {path}", {"postgen": True})
     p = subprocess.Popen([str(exe), *args], cwd=str(exe.parent),
                          stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                          stderr=subprocess.STDOUT, text=True,
@@ -565,12 +565,12 @@ def run_script(cmd, path):
     for line in p.stdout:
         line = line.rstrip()
         if line:
-            log("out", f"[{exe.stem}] {line}", {"bodyOnly": True})
+            log("out", f"[{exe.stem}] {line}", {"bodyOnly": True, "postgen": True})
     rc = p.wait()
     if rc:
-        log("err", f"{exe.stem} exited {rc}")
+        log("err", f"{exe.stem} exited {rc}", {"postgen": True})
         return False
-    log("sys", f"{exe.stem} done")
+    log("sys", f"{exe.stem} done", {"postgen": True})
     return True
 
 
@@ -602,20 +602,23 @@ def postprocess(path, keys, chain=False):
     """
     prefix, exts = media_kind(path)
     if not prefix:
-        log("warn", f"{path.name} is neither video nor image - no post-gen script run")
+        log("warn", f"{path.name} is neither video nor image - no post-gen script run",
+            {"postgen": True})
         return
     scripts = {s["key"]: s for s in postgen_scripts(prefix)}
     for key in list(keys)[:MAX_POSTGEN]:
         spec = scripts.get(key)
         if not spec:
-            log("warn", f"post-gen script {key} is not defined in .env - skipping")
+            log("warn", f"post-gen script {key} is not defined in .env - skipping",
+                {"postgen": True})
             continue
         before = set(path.parent.iterdir())
         ok = run_script(spec["cmd"], path)
         if not chain:
             continue
         if not ok:
-            log("err", f"{spec['label']} failed - stopping the post-gen chain")
+            log("err", f"{spec['label']} failed - stopping the post-gen chain",
+                {"postgen": True})
             return
         path = chain_output(path, before, exts)
 

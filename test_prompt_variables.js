@@ -1,6 +1,9 @@
 // node test_prompt_variables.js - Pro-only templates, controls, label help, library and dispatch.
 const fs = require("fs"), assert = require("assert");
 const html = fs.readFileSync(__dirname + "/index.html","utf8").replace(/\r\n/g,"\n");
+// renderService now registers each job for the badges/gallery; stub those globals so the
+// sliced renderService can run outside the page.
+Object.assign(globalThis,{jobStart:()=>({}),jobThumb:()=>{},renderJobsUI:()=>{},svcProvider:()=>null,JOBS:[]});
 const API="https://api.example", ARK="https://ark.example";
 const SERVICES=eval(html.slice(html.indexOf("const AREAS"),html.indexOf("const GROUPS"))+"\nSERVICES");
 const pro=SERVICES.nbpro;
