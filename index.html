@@ -278,6 +278,10 @@
     background: linear-gradient(158deg,#FF6A46 0%,#D3381C 46%,#8E2010 100%); }
   .chip i { display: block; flex: none; border: 1.5px solid currentColor; opacity: .8; }
   .chip b { font-family: var(--mono); font-size: 13.5px; letter-spacing: .04em; }
+  .radio { display: flex; gap: 18px; flex-wrap: wrap; align-items: center; }
+  .radio label { display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+    font-size: 12.5px; letter-spacing: .1em; text-transform: uppercase; color: #AEB7BF; }
+  .radio input { margin: 0; accent-color: var(--hot); }
   .chip s { text-decoration: none; opacity: .62; font-size: 11.5px; letter-spacing: .1em; }
 
   .drop {
@@ -1504,6 +1508,19 @@ const SD5_SIZES = {
   "9:16": ["800x1424", "1152x2048", "1584x2816"],
 };
 
+// Bria FIBO Expand canvas presets. The two freehand canvas boxes were replaced by an
+// orientation + resolution pair of radios; this maps that choice to the [w,h] fal's
+// canvas_size takes. 16:9 at two tiers; portrait is the same turned 90 degrees.
+const FIBO_CANVAS = {
+  "2K": { Landscape: [1920, 1080], Portrait: [1080, 1920] },
+  "4K": { Landscape: [3840, 2160], Portrait: [2160, 3840] },
+};
+// (form state or request body) -> [canvas_w, canvas_h], defaulting to 2K portrait.
+const fiboCanvas = s => {
+  const res = FIBO_CANVAS[s.resolution] || FIBO_CANVAS["2K"];
+  return res[s.orientation] || res.Portrait;
+};
+
 /* ---------- Google: Veo 3.1 + Gemini Omni Flash 1.1 ----------
    Two API shapes on one host. Veo is async: POST :predictLongRunning, poll the operation,
    download a key-gated uri. Omni is the synchronous Interactions API: one POST returns a
@@ -1943,37 +1960,46 @@ const SERVICES = {
     title: "Bria FIBO Expand 1.5 (fal.ai)", fal: "bria/fibo-edit-1.5/expand",
     abbr: "fibx",
     results: j => j.image && j.image.url ? [j.image.url] : [],
-    // Auto-fit the source as it lands, against the canvas as set. The source's largest side
-    // is scaled to 75% of the matching canvas side (width if the source is wider, height if
-    // taller), the other side follows the source's aspect ratio, and the result is centred.
+    // Contain-fit the source inside the radio-selected canvas as it lands: scale it to 75% of
+    // whichever canvas axis binds first, so it fits whole on BOTH axes, then centre it. Scaling
+    // to the binding axis keeps orig_x/orig_y >= 0, so no part of the source is ever cropped -
+    // the old rule scaled the source's own longer side and drove the origin negative whenever
+    // the source was less elongated than the canvas on the other axis. Also re-called from the
+    // orientation/resolution radios with the current orig_w/orig_h (which carry the source's
+    // aspect ratio), so the placement re-centres whole into the new canvas.
     fit: (s, w, h) => {
-      const scale = w >= h ? s.canvas_w * 0.75 / w : s.canvas_h * 0.75 / h;
+      const [cw, ch] = fiboCanvas(s);
+      const scale = 0.75 * Math.min(cw / w, ch / h);
       s.orig_w = Math.round(w * scale);
       s.orig_h = Math.round(h * scale);
-      s.orig_x = Math.round((s.canvas_w - s.orig_w)/2);
-      s.orig_y = Math.round((s.canvas_h - s.orig_h)/2);
+      s.orig_x = Math.round((cw - s.orig_w)/2);
+      s.orig_y = Math.round((ch - s.orig_h)/2);
     },
-    // Bria takes three [x,y]/[w,h] pairs; the form asks for the six numbers separately so each
-    // one gets its own label and range. A pair is only sent when both halves are filled.
+    // Bria takes three [x,y]/[w,h] pairs. canvas_size is derived from the orientation+resolution
+    // radios (always present); the placement pair is only sent when both halves are filled.
     shape: b => {
-      // Each pair is all-or-nothing: half a pair would serialise as [1200,null] and fal
-      // rejects that with a shape error instead of the plain "field required" it should give.
-      if (b.canvas_w !== undefined && b.canvas_h !== undefined) b.canvas_size = [b.canvas_w, b.canvas_h];
+      b.canvas_size = fiboCanvas(b);
+      // Each placement pair is all-or-nothing: half a pair would serialise as [1200,null] and
+      // fal rejects that with a shape error instead of the plain "field required" it should give.
       if (b.orig_w !== undefined && b.orig_h !== undefined) b.original_image_size = [b.orig_w, b.orig_h];
       if (b.orig_x !== undefined && b.orig_y !== undefined) b.original_image_location = [b.orig_x, b.orig_y];
-      ["canvas_w","canvas_h","orig_w","orig_h","orig_x","orig_y"].forEach(k => delete b[k]);
+      ["orientation","resolution","orig_w","orig_h","orig_x","orig_y"].forEach(k => delete b[k]);
     },
     fields: [
       ["image_url","file","Source image",{hint:"required"}],
-      ["canvas_w","number","Canvas width",{def:1080,min:1,max:5000,hint:"required - canvas area 25 MP or less (max 5000x5000)"}],
-      ["canvas_h","number","Canvas height",{def:1920,min:1,max:5000,hint:"required"}],
+      // Two radios stand in for the old freehand canvas boxes - orientation x resolution picks
+      // one of four fixed canvases. rerender redraws the auto-fitted placement fields below.
+      ["orientation","radio","Orientation",{opts:["Portrait","Landscape"],def:"Portrait",rerender:true,
+        hint:"required - the shape of the output canvas"}],
+      ["resolution","radio","Resolution",{opts:["2K","4K"],def:"2K",rerender:true,
+        hint:"required - portrait: 2K is 1080x1920, 4K is 2160x3840; landscape swaps each to WxH"}],
       ["aspect_ratio","select","Aspect ratio",{
         opts:["","1:1","2:3","3:2","3:4","4:3","4:5","5:4","9:16","16:9"], def:"",
         hint:"optional - when set it overrides the placement fields below"}],
       ["orig_w","number","Original width",{def:"",min:1,max:5000,
-        hint:"optional - size of the source inside the canvas. Keep the subject above 15% of canvas area"}],
+        hint:"auto-fitted to sit fully inside the canvas; override to resize the source"}],
       ["orig_h","number","Original height",{def:"",min:1,max:5000,hint:"optional - pairs with original width"}],
-      ["orig_x","number","Original X",{def:"",hint:"optional - upper-left corner of the source; may sit outside the canvas (source is cropped)"}],
+      ["orig_x","number","Original X",{def:"",hint:"auto-centred so the whole source stays inside the canvas; override to move it"}],
       ["orig_y","number","Original Y",{def:"",hint:"optional - pairs with original X"}],
       ["prompt","textarea","Prompt",{def:"",rows:3,hint:"optional - describe what fills the new area; omit to just extend"}],
       ["seed","number","Seed",{def:"",min:0,max:2147483647,hint:"optional - blank is random; reuse a seed to reproduce a result"}],
@@ -2382,6 +2408,25 @@ const SERVICES = {
   //   image: POST /images/generations         -> {data:[{url}]}, synchronous
   // Model ids carry their release date and are what the API actually keys on; the
   // titles below show them so a rejected id is visible without opening the console.
+  // Seedream 5.5 - same ModelArk shape as 5.0, only the id and title differ. The id
+  // carries no "pro" tag, unlike 5.0's. The title shows the id so a bad one is visible.
+  sd55pro: {
+    title: "Dola-Seedream-5.5 - dola-seedream-5-5-261028",
+    arkImage: `${ARK}/images/generations`, model: "dola-seedream-5-5-261028",
+    abbr: "sd55p",
+    // No watermark control on the form: the platform default is on, so it is pinned off here.
+    shape: b => { b.watermark = false; },
+    results: j => (j.data || []).map(d => d.url).filter(Boolean),
+    fields: [
+      ["prompt","textarea","Prompt",{def:"",rows:4,hint:"required"}],
+      ["image","files","Reference images",{
+        hint:"optional - up to 10. Any image here switches the model from text-to-image into edit / compose"}],
+      ["size","sizepick","Aspect ratio / resolution",{def:"1152x2048", opts:SD5_SIZES,
+        hint:"pick the shape, then the pixels - the ratio is carried by the value itself"}],
+      ["output_format","select","Output format",{opts:["png","jpeg"],def:"jpeg"}],
+      ["seed","number","Seed",{def:"",min:-1,max:2147483647,hint:"optional - blank is random, -1 also means random"}],
+    ]
+  },
   sd5pro: {
     title: "Dola-Seedream-5.0-pro - dola-seedream-5-0-pro-260628",
     arkImage: `${ARK}/images/generations`, model: "dola-seedream-5-0-pro-260628",
@@ -2417,6 +2462,12 @@ const SERVICES = {
 // whether you leave it by switching models or by leaving the page entirely.
 // Order is newest first: models[0] is what a page with no remembered pick opens on.
 const PUBLISHERS = {
+  // ByteDance Seedream on BytePlus ModelArk. Image group -> gets the image post-gen row.
+  // Reuses the byteplus accent (same parent company); only name/tail differ.
+  pubBytedance: {
+    brand:"byteplus", name:"BYTEDANCE", tail:"SEEDREAM",
+    sub:"Seedream image generation &middot; ModelArk ap-southeast-1",
+    models:[["sd55pro","Dola-Seedream-5.5"], ["sd5pro","Dola-Seedream-5.0-pro"]] },
   pubKling: {
     brand:"kling", name:"KLING", tail:"AI",
     sub:"image to video &middot; api-singapore.klingai.com",
@@ -2479,7 +2530,7 @@ const ALL_GROUPS = [
   { label:"IMAGE EDITORS", code:"CH-01", tag:"INDEX / 01", items:[
       ["pubGoogleImage","Google Gemini Images"],
       ["pubQwenImage","QwenCloud Qwen-Image"],
-      ["sd5pro","Dola-Seedream-5.0-pro"],
+      ["pubBytedance","Bytedance"],
       ["pubFalImage","fal.ai"],
       ["pubBriaImage","bria.ai"],
       ["pubBflImage","bfl.ai"],
@@ -2949,6 +3000,28 @@ function renderService(id, state){
       s.value = state[name];
       s.onchange = ()=>{ state[name] = cast(s.value); if (o.rerender) redraw(); };
       cell.appendChild(s);
+    } else if (type === "radio"){
+      // Exclusive buttons. Like select, the stored value is validated against the options so a
+      // stale pick can't render nothing. When a canvas radio changes under an already-measured
+      // source (bria expand), re-fit it so the whole source stays inside the new canvas.
+      const cast = v => o.num ? Number(v) : v;
+      if (!o.opts.map(String).includes(String(state[name]))) state[name] = cast(o.def);
+      const box = document.createElement("div"); box.className = "radio";
+      o.opts.forEach(v=>{
+        const lab = document.createElement("label");
+        const rb = document.createElement("input");
+        rb.type = "radio"; rb.name = id + "_" + name;
+        rb.checked = String(state[name]) === String(v);
+        rb.onchange = ()=>{
+          if (!rb.checked) return;
+          state[name] = cast(v);
+          if (svc.fit && state.orig_w && state.orig_h) svc.fit(state, state.orig_w, state.orig_h);
+          if (o.rerender) redraw();
+        };
+        lab.append(rb, document.createTextNode(" " + v));
+        box.appendChild(lab);
+      });
+      cell.appendChild(box);
     } else if (type === "sizepick"){
       // Two rows of chips, ratio then pixels. Only `size` is ever stored - the ratio is
       // read back off the chosen value, so no extra key leaks into the request body.

@@ -138,6 +138,25 @@ assert.strictEqual(wm.watermark, false, "watermark must be sent as false, not le
 assert(!SERVICES.sd5pro.fields.some(f => f[0] === "watermark"), "no watermark control on the form");
 assert.strictEqual(opt("sd5pro", "output_format").def, "jpeg");
 
+// --- seedream 5.5 + the Bytedance page ---------------------------------------
+// 5.5 mirrors 5.0's ModelArk shape; only the id/title differ. Its id carries no "pro"
+// tag. It is pinned here, not in the ids map above, because that map special-cases a
+// single image model (sd5pro) and treats the rest as video task endpoints. Both models
+// sit behind the one Bytedance publisher page, which replaced the standalone 5.0 nav tab.
+assert(SERVICES.sd55pro, "sd55pro must be defined");
+assert.strictEqual(SERVICES.sd55pro.model, "dola-seedream-5-5-261028", "5.5 model id");
+assert.match(SERVICES.sd55pro.arkImage, /\/images\/generations$/, "5.5 answers synchronously");
+assert(!SERVICES.sd55pro.ark, "the 5.5 image tab must not be polled as a task");
+const wm55 = {};
+SERVICES.sd55pro.shape(wm55);
+assert.strictEqual(wm55.watermark, false, "5.5 watermark must be pinned off too");
+assert.strictEqual(opt("sd55pro", "size").def, "1152x2048");
+assert.deepStrictEqual(PUBLISHERS.pubBytedance.models.map(m => m[0]), ["sd55pro", "sd5pro"],
+  "the Bytedance page lists 5.5 then 5.0");
+const imageNav = GROUPS.find(g => g.label === "IMAGE EDITORS").items.map(([id]) => id);
+assert(imageNav.includes("pubBytedance"), "the Bytedance page must be in the image nav");
+assert(!imageNav.includes("sd5pro"), "the standalone 5.0 tab is gone, folded into the page");
+
 // --- the Enhancor switch -----------------------------------------------------
 // Off means unreachable: neither a nav entry nor a model behind a publisher page's
 // drop-down may point at a tab that posts to Enhancor.

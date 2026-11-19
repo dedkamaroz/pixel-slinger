@@ -81,11 +81,22 @@ assert.deepStrictEqual(fx.results({}), []);
 // --- Bria FIBO Expand 1.5 ----------------------------------------------------
 const br = SERVICES.fiboexpand;
 assert.strictEqual(br.fal, "bria/fibo-edit-1.5/expand", "endpoint id must match fal's");
-["image_url", "prompt", "seed", "aspect_ratio",
+["image_url", "orientation", "resolution", "prompt", "seed", "aspect_ratio",
  "retain_original_quality", "preserve_alpha", "return_model_output"]
   .forEach(f => assert(names(br).includes(f), `fibo expand is missing ${f}`));
 // fibo-1.5 refuses any request that includes negative_prompt, so the form must not offer one.
 assert(!names(br).includes("negative_prompt"), "fibo-1.5 rejects negative_prompt - do not offer it");
+// The two freehand canvas boxes are gone, replaced by orientation + resolution radios whose
+// 2K-portrait default reproduces the old 1080x1920 canvas.
+["canvas_w", "canvas_h"].forEach(f =>
+  assert(!names(br).includes(f), `${f} was replaced by the orientation/resolution radios`));
+const rspec = n => br.fields.find(f => f[0] === n)[3];
+assert.strictEqual(br.fields.find(f => f[0] === "orientation")[1], "radio");
+assert.deepStrictEqual(rspec("orientation").opts, ["Portrait", "Landscape"]);
+assert.strictEqual(rspec("orientation").def, "Portrait");
+assert.strictEqual(br.fields.find(f => f[0] === "resolution")[1], "radio");
+assert.deepStrictEqual(rspec("resolution").opts, ["2K", "4K"]);
+assert.strictEqual(rspec("resolution").def, "2K");
 
 // Every select's default has to be one of its own options, or the field renders blank - on
 // both new image tabs, so a later field with a stray default fails here rather than silently.
@@ -93,14 +104,20 @@ assert(!names(br).includes("negative_prompt"), "fibo-1.5 rejects negative_prompt
   if (t === "select") assert(o.opts.includes(o.def), `${svc.title}: ${n} default is not an option`);
 }));
 
-b = { image_url: "u", canvas_w: 1200, canvas_h: 800 };
+// canvas_size now comes from the orientation + resolution radios, not two freehand boxes.
+b = { image_url: "u", orientation: "Portrait", resolution: "2K" };
 br.shape(b);
-assert.deepStrictEqual(b.canvas_size, [1200, 800]);
+assert.deepStrictEqual(b.canvas_size, [1080, 1920], "2K portrait reproduces the old 1080x1920 canvas");
 assert(!("original_image_size" in b), "an unset pair must not be sent");
 assert(!("original_image_location" in b));
-["canvas_w", "canvas_h"].forEach(k => assert(!(k in b), `${k} is form-only`));
+["orientation", "resolution"].forEach(k => assert(!(k in b), `${k} is form-only`));
 
-b = { image_url: "u", canvas_w: 1200, canvas_h: 800, orig_w: 600, orig_h: 400, orig_x: 0, orig_y: 0 };
+b = { image_url: "u", orientation: "Landscape", resolution: "4K" };
+br.shape(b);
+assert.deepStrictEqual(b.canvas_size, [3840, 2160], "4K landscape is 3840x2160");
+
+b = { image_url: "u", orientation: "Portrait", resolution: "2K",
+      orig_w: 600, orig_h: 400, orig_x: 0, orig_y: 0 };
 br.shape(b);
 assert.deepStrictEqual(b.original_image_size, [600, 400]);
 // 0,0 is a real corner. It has to survive - which is why a blank number field stays ""
@@ -108,37 +125,48 @@ assert.deepStrictEqual(b.original_image_size, [600, 400]);
 assert.deepStrictEqual(b.original_image_location, [0, 0]);
 
 // The send loop drops "" before shape() runs, so a blanked field arrives as absent.
-b = { image_url: "u", canvas_w: 10, canvas_h: 10, orig_w: 5 };
+b = { image_url: "u", orientation: "Portrait", resolution: "2K", orig_w: 5 };
 br.shape(b);
 assert(!("original_image_size" in b), "width without height must not be sent");
-
-b = { image_url: "u" };   // canvas blanked entirely
-br.shape(b);
-assert(!("canvas_size" in b), "half a pair must never serialise as [n,null]");
 
 // matches BriaExpandOutput: { image: Image, seed: int }
 assert.deepStrictEqual(br.results({ image: { url: "z" }, seed: 1 }), ["z"]);
 assert.deepStrictEqual(br.results({}), []);
 
-// fit() fills the placement fields off the measured source. The canvas stays as set; the
-// source's largest side is scaled to 75% of the matching canvas side (width if wider, height
-// if taller), the other side follows the source's aspect ratio, and it is centred.
-const fit = (canvas, w, h) => { const b = { canvas_w: canvas[0], canvas_h: canvas[1] }; br.fit(b, w, h);
-  return [b.canvas_w, b.canvas_h, b.orig_w, b.orig_h, b.orig_x, b.orig_y]; };
-assert.deepStrictEqual(fit([1080, 1920], 500, 1000), [1080, 1920, 720, 1440, 180, 240],
-  "tall source: height is 75% of canvas height (1440), width follows, centred");
-assert.deepStrictEqual(fit([1080, 1920], 1080, 1920), [1080, 1920, 810, 1440, 135, 240],
-  "canvas-shaped source: still height 75% of the canvas, centred");
-assert.deepStrictEqual(fit([1080, 1920], 3000, 3000), [1080, 1920, 810, 810, 135, 555],
-  "square (w>=h): width is 75% of canvas width (810)");
-assert.deepStrictEqual(fit([1080, 1920], 600, 400), [1080, 1920, 810, 540, 135, 690],
-  "wide source on a portrait canvas: width 75% of canvas width, centred");
-assert.deepStrictEqual(fit([1080, 1920], 1600, 900), [1080, 1920, 810, 456, 135, 732],
-  "wide source: width 75% of canvas width, height follows the aspect ratio");
-assert.deepStrictEqual(fit([3840, 2160], 1200, 2000), [3840, 2160, 972, 1620, 1434, 270],
-  "tall source on a landscape canvas: height 75% of canvas height (1620), centred");
-assert.deepStrictEqual(fit([3840, 2160], 900, 1200), [3840, 2160, 1215, 1620, 1313, 270],
-  "tall source on a landscape canvas, measured against canvas height");
+// fit() contain-fits the source inside the radio-selected canvas: scaled to 75% of whichever
+// axis binds, centred, and - the bug this fixes - never past an edge. orig_x/orig_y stay >= 0
+// for every source shape, so the whole source always sits inside the canvas.
+const fit = (orientation, resolution, w, h) => {
+  const b = { orientation, resolution }; br.fit(b, w, h);
+  return [b.orig_w, b.orig_h, b.orig_x, b.orig_y];
+};
+// Portrait 2K canvas (1080x1920).
+assert.deepStrictEqual(fit("Portrait", "2K", 500, 1000), [720, 1440, 180, 240],
+  "tall source: height binds at 75% (1440), width follows, centred");
+assert.deepStrictEqual(fit("Portrait", "2K", 600, 400), [810, 540, 135, 690],
+  "wide source on a portrait canvas: width binds at 75% (810), centred");
+// The regression this fixes: a source tall but less elongated than the canvas. The old rule
+// scaled the source's own long side (height) and overflowed the width to 1200 > 1080, placing
+// orig_x at -60 and cropping the left/right of the source. Contain keeps the whole source in.
+assert.deepStrictEqual(fit("Portrait", "2K", 1000, 1200), [810, 972, 135, 474],
+  "mildly-tall source: width binds, orig_x stays positive (was -60 before the fix)");
+// Landscape 4K canvas (3840x2160). A square source overflowed the height under the old rule
+// (orig_h scaled off width), giving a negative orig_y; contain keeps it inside.
+assert.deepStrictEqual(fit("Landscape", "4K", 1000, 1000), [1620, 1620, 1110, 270],
+  "square source on a landscape canvas: height binds at 75% (1620), orig_y positive");
+
+// Invariant across every canvas and a spread of source shapes: the placement is non-negative,
+// sits fully inside the canvas, and preserves the source's aspect ratio.
+[["Portrait", "2K", 1080, 1920], ["Landscape", "2K", 1920, 1080],
+ ["Portrait", "4K", 2160, 3840], ["Landscape", "4K", 3840, 2160]].forEach(([ori, res, cw, ch]) => {
+  [[500, 1000], [1000, 500], [1000, 1000], [1000, 1200], [1600, 900], [300, 1900], [1900, 300]]
+    .forEach(([w, h]) => {
+      const [ow, oh, ox, oy] = fit(ori, res, w, h);
+      assert(ox >= 0 && oy >= 0, `${ori} ${res} ${w}x${h}: origin must be >= 0, got ${ox},${oy}`);
+      assert(ox + ow <= cw && oy + oh <= ch, `${ori} ${res} ${w}x${h}: source must sit inside the canvas`);
+      assert(Math.abs((ow / oh) / (w / h) - 1) < 0.02, `${ori} ${res} ${w}x${h}: aspect ratio preserved`);
+    });
+});
 
 // --- FLUX 2 Pro Outpaint -----------------------------------------------------
 const fo = SERVICES.fluxoutpaint;
