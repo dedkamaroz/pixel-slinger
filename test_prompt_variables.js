@@ -34,11 +34,35 @@ const wire={...state}; pro.shape(wire);
 assert.strictEqual(wire.contents[0].parts[0].text,expected);
 for (const key of ["time_of_day","location","expression"]) assert(!(key in wire));
 assert.strictEqual(wire.generationConfig.candidateCount,1);
-for (const [id,svc] of Object.entries(SERVICES)) if (id!=="nbpro") {
+// Prompt variables now ride on Nano Banana Pro plus both Seedream models, FLUX.1 Kontext,
+// and all three Qwen-Image models. Every other service must stay free of them.
+const VAR_MODELS=["nbpro","sd55pro","sd5pro","bflkontext","qwenimg30pro","qwenimg21pro","qwenimg21turbo"];
+for (const id of VAR_MODELS) {
+  const svc=SERVICES[id];
+  assert(svc,`${id} missing`);
+  assert.strictEqual(typeof svc.promptText,"function",`${id} must expand templates`);
+  for (const key of ["time_of_day","location","expression"]) {
+    const field=svc.fields.find(f=>f[0]===key);
+    assert(field && field[1]==="select" && field[3].rerender,`${id} must gain a ${key} selector`);
+  }
+  assert.strictEqual(svc.promptText({prompt:"{{time_of_day}}",time_of_day:"night"}),"night");
+  assert.throws(()=>svc.promptText({prompt:"{{location}}"}), /Choose/);
+}
+for (const [id,svc] of Object.entries(SERVICES)) if (!VAR_MODELS.includes(id)) {
   assert(!svc.promptText,`${id} must not expand templates`);
   assert(!svc.fields.some(f=>["time_of_day","location","expression"].includes(f[0])),`${id} must not gain selectors`);
 }
-console.log("ok - Pro variable options, replacement, validation, template preservation, wire shape and model isolation");
+// Each transport resolves the template into the prompt it actually sends and drops the
+// selector keys so they do not ride into the request body.
+const sdWire={...state,watermark:true}; SERVICES.sd55pro.shape(sdWire);
+assert.strictEqual(sdWire.prompt,expected); assert.strictEqual(sdWire.watermark,false);
+const bflWire={...state}; SERVICES.bflkontext.shape(bflWire);
+assert.strictEqual(bflWire.prompt,expected);
+const qwWire={...state,size:"1152x2048"}; SERVICES.qwenimg30pro.shape(qwWire);
+assert.strictEqual(qwWire.input.messages[0].content[0].text,expected);
+for (const wire of [sdWire,bflWire,qwWire])
+  for (const key of ["time_of_day","location","expression"]) assert(!(key in wire));
+console.log("ok - variable options, replacement, validation, template preservation, per-transport wire shape and model isolation");
 
 // Minimal DOM runs the actual form renderer and saved-prompt handlers.
 class Element {

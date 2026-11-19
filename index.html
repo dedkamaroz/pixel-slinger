@@ -1264,6 +1264,37 @@ const klingVideos = {
   },
 };
 
+// Prompt-template variables: {{time_of_day}} / {{location}} / {{expression}} placeholders a
+// user drops into a prompt and fills from the selectors below. Shared by Nano Banana Pro,
+// both Seedream models, FLUX.1 Kontext, and every Qwen-Image model - declared here, above
+// the first consumer (the Qwen factory), so the field spread is not in a const's dead zone.
+const PRO_PROMPT_VARIABLES = [
+  ["time_of_day","select","Time of day",{opts:["","morning","day","evening","night"],def:"",rerender:true,
+    hint:"replaces {{time_of_day}} in the prompt template"}],
+  ["location","select","Location",{opts:["","living room","bedroom","kitchen","bathroom","dining room","hallway","backyard","office"],def:"",rerender:true,
+    hint:"replaces {{location}} in the prompt template"}],
+  ["expression","select","Subtle face expression",{opts:["","bored","annoyed","impatient","happy","distracted"],def:"",rerender:true,
+    hint:"replaces {{expression}}; describe it as subtle in your template"}],
+];
+function proPromptText(b, strict=true){
+  return (b.prompt || "").replace(/{{\s*(time_of_day|location|expression)\s*}}/g, (token,key) => {
+    const field = PRO_PROMPT_VARIABLES.find(f => f[0] === key);
+    const value = b[key];
+    if (!value || !field[3].opts.includes(value)) {
+      if (strict) throw new Error(`Choose ${field[2].toLowerCase()} for {{${key}}}`);
+      return token;
+    }
+    return value;
+  });
+}
+// Substitute the {{var}} tokens into the prompt, then drop the selector keys so they do
+// not ride into a request body that is sent as-is (ModelArk, bfl). Gemini/Qwen rebuild
+// the body from scratch, so the delete is a harmless no-op there.
+function applyPromptVars(b){
+  b.prompt = proPromptText(b);
+  PRO_PROMPT_VARIABLES.forEach(f => delete b[f[0]]);
+}
+
 /* ---------- QwenCloud models ---------- */
 // Both models post a DashScope envelope: `model` at the top, the inputs under `input`, every
 // knob under `parameters`. Paths are relative to QWEN, like Kling's are to KLING. What differs
@@ -1413,6 +1444,7 @@ const qwenImage21 = (model, o) => ({
   qwenImage: "/services/aigc/multimodal-generation/generation",
   model, abbr: o.abbr,
   shape: b => {
+    applyPromptVars(b);
     if (b.size) b.size = String(b.size).replace("x", "*");
     if ((b.image || []).length && b.prompt_extend_mode === "agent") b.prompt_extend_mode = "direct";
     qwenShape(QWEN_IMG_PARAMS, b => ({
@@ -1420,12 +1452,14 @@ const qwenImage21 = (model, o) => ({
         content: [{ text: b.prompt || "" }, ...(b.image || []).map(url => ({ image: url }))] }],
     }))(b);
   },
+  promptText: proPromptText,
   results: j => ((j.output || {}).choices || [])
     .flatMap(c => ((c.message || {}).content || []).map(p => p.image)).filter(Boolean),
   fields: [
     ["prompt","textarea","Prompt",{def:"",rows:4,
       hint:"required - up to 4,500 tokens. Renders text down to 10px, so long layouts (menus, "
          + "storyboards, forms) can be described in full"}],
+    ...PRO_PROMPT_VARIABLES,
     ["image","files","Reference images",{
       hint:"optional - 1 to 10, addressed as Image 1, Image 2... in the prompt. Any image here "
          + "switches the model from text-to-image into edit. jpg/png/bmp/tiff/webp/gif, max 10 MB each"}],
@@ -1454,7 +1488,9 @@ const qwenModels = {
     title: "Qwen-Image-3.0-Pro - text to image / image edit",
     qwenImage: "/services/aigc/multimodal-generation/generation",
     model: "qwen-image-3.0-pro", abbr: "qi30p",
+    promptText: proPromptText,
     shape: b => {
+      applyPromptVars(b);
       // "1152x2048" on the chips is "1152*2048" on the wire.
       if (b.size) b.size = String(b.size).replace("x", "*");
       // agent mode is text-to-image only - with an image in play the API 400s rather than
@@ -1472,6 +1508,7 @@ const qwenModels = {
       ["prompt","textarea","Prompt",{def:"",rows:4,
         hint:"required - up to 4,500 tokens. Renders text down to 10px, so long layouts (menus, "
            + "storyboards, forms) can be described in full"}],
+      ...PRO_PROMPT_VARIABLES,
       ["image","files","Reference images",{
         hint:"optional - 1 to 3, addressed as Image 1, Image 2, Image 3 in the prompt. Any image here "
            + "switches the model from text-to-image into edit. jpg/png/bmp/tiff/webp/gif, max 10 MB each"}],
@@ -1758,25 +1795,6 @@ async function storeGeminiImage(url, abbr){
   return new URL(new URL(r.local || r.url).pathname, location.origin).href;
 }
 const GEMINI_IMAGE_RATIOS = ["1:1","2:3","3:2","3:4","4:3","4:5","5:4","9:16","16:9","21:9"];
-const PRO_PROMPT_VARIABLES = [
-  ["time_of_day","select","Time of day",{opts:["","morning","day","evening","night"],def:"",rerender:true,
-    hint:"replaces {{time_of_day}} in the prompt template"}],
-  ["location","select","Location",{opts:["","living room","bedroom","kitchen","bathroom","dining room","hallway","backyard","office"],def:"",rerender:true,
-    hint:"replaces {{location}} in the prompt template"}],
-  ["expression","select","Subtle face expression",{opts:["","bored","annoyed","impatient","happy","distracted"],def:"",rerender:true,
-    hint:"replaces {{expression}}; describe it as subtle in your template"}],
-];
-function proPromptText(b, strict=true){
-  return (b.prompt || "").replace(/{{\s*(time_of_day|location|expression)\s*}}/g, (token,key) => {
-    const field = PRO_PROMPT_VARIABLES.find(f => f[0] === key);
-    const value = b[key];
-    if (!value || !field[3].opts.includes(value)) {
-      if (strict) throw new Error(`Choose ${field[2].toLowerCase()} for {{${key}}}`);
-      return token;
-    }
-    return value;
-  });
-}
 const geminiImage = (model, title, abbr, sizes, levels, search=false, wide=false) => ({
   title, geminiImage:model, abbr, prep:geminiImagePrep,
   shape:b => {
@@ -2126,10 +2144,13 @@ const SERVICES = {
   // path. Expand's image is base64-only, so bflExpandPrep inlines it before the send.
   bflkontext: {
     title: "FLUX.1 Kontext [pro] (bfl.ai)", bfl: "flux-kontext-pro", abbr: "kntx",
+    shape: b => applyPromptVars(b),
+    promptText: proPromptText,
     results: j => j.result && j.result.sample ? [j.result.sample] : [],
     fields: [
       ["input_image","file","Source image",{hint:"required here - the image to edit (base64 or URL)"}],
       ["prompt","textarea","Prompt",{def:"",rows:4,hint:"required - the edit instruction"}],
+      ...PRO_PROMPT_VARIABLES,
       ["aspect_ratio","select","Aspect ratio",{
         opts:["","21:9","16:9","3:2","4:3","1:1","3:4","2:3","9:16","9:21"], def:"",
         hint:"optional - blank keeps the source aspect ratio (allowed 21:9 to 9:21)"}],
@@ -2415,10 +2436,12 @@ const SERVICES = {
     arkImage: `${ARK}/images/generations`, model: "dola-seedream-5-5-261028",
     abbr: "sd55p",
     // No watermark control on the form: the platform default is on, so it is pinned off here.
-    shape: b => { b.watermark = false; },
+    shape: b => { applyPromptVars(b); b.watermark = false; },
+    promptText: proPromptText,
     results: j => (j.data || []).map(d => d.url).filter(Boolean),
     fields: [
       ["prompt","textarea","Prompt",{def:"",rows:4,hint:"required"}],
+      ...PRO_PROMPT_VARIABLES,
       ["image","files","Reference images",{
         hint:"optional - up to 10. Any image here switches the model from text-to-image into edit / compose"}],
       ["size","sizepick","Aspect ratio / resolution",{def:"1152x2048", opts:SD5_SIZES,
@@ -2432,10 +2455,12 @@ const SERVICES = {
     arkImage: `${ARK}/images/generations`, model: "dola-seedream-5-0-pro-260628",
     abbr: "sd5p",
     // No watermark control on the form: the platform default is on, so it is pinned off here.
-    shape: b => { b.watermark = false; },
+    shape: b => { applyPromptVars(b); b.watermark = false; },
+    promptText: proPromptText,
     results: j => (j.data || []).map(d => d.url).filter(Boolean),
     fields: [
       ["prompt","textarea","Prompt",{def:"",rows:4,hint:"required"}],
+      ...PRO_PROMPT_VARIABLES,
       ["image","files","Reference images",{
         hint:"optional - up to 10. Any image here switches the model from text-to-image into edit / compose"}],
       // response_format is left at its "url" default on purpose: b64_json returns the
